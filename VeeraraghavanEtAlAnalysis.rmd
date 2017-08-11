@@ -1,0 +1,2666 @@
+---
+title: "BreastTumorSegAnalysis"
+author: "Harini Veeraraghavan"
+date: "May 9, 2017"
+output: 
+  html_document: 
+    fig_height: 8
+    fig_width: 11
+    #keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+## R Markdown
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+require(tidyverse)
+require(knitr)
+require(broom)
+require(BlandAltmanLeh)
+require(randomForest)
+require(pROC)
+require(ROCR)
+require(rcompanion)
+require(ggplot2)
+#require(ggExtra)
+#require(gridExtra)
+
+
+
+
+# options for output
+options(scipen=1, digits=3)
+
+# Variants of mean, median etc with na.rm = T
+min_    <- function(...) min(..., na.rm=T)
+max_    <- function(...) max(..., na.rm=T)
+mean_   <- function(...) mean(..., na.rm=T)
+median_ <- function(...) median(..., na.rm=T)
+Q1_     <- function(...) quantile(..., probs=0.25, na.rm = TRUE)
+Q3_     <- function(...) quantile(..., probs=0.75, na.rm = TRUE)
+sum_    <- function(...) sum(..., na.rm=T)
+sd_     <- function(...) sd(..., na.rm=T)
+
+
+# function to return counts of samples
+n_fun <- function(x, y){ # y is position for labels
+  return(data.frame(y, label = paste0("n = ", length(x))))
+}
+
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+```
+
+####Load the data file
+```{r, echo=FALSE}
+  #dataBreastAOV <- read.csv("SegAccuraciesMethodsNew.csv")
+
+  dataBreastAOV <- read.csv("SIDataFile1.csv")
+
+ 
+dataBreastAOV$VRnotABS <- (dataBreastAOV$Volume.GroundTruth - dataBreastAOV$Volumes)/
+    (dataBreastAOV$Volume.GroundTruth + dataBreastAOV$Volumes)
+  
+  indxGCGMM <- dataBreastAOV$Method=="GCGMM"
+  dataGCGMM <- dataBreastAOV[indxGCGMM,]
+  indxGCVec <- dataBreastAOV$Method=="GCVec"
+  dataGCVec <- dataBreastAOV[indxGCVec,]
+  indxFCM <- dataBreastAOV$Method == "TFCM"
+  dataFCM <- dataBreastAOV[indxFCM,]
+  
+  dataBreastAOV <- droplevels(dataBreastAOV)
+  
+  
+```
+
+
+#### Overall accuracy
+
+Summarize DSC accuracy
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    DSC)
+
+```
+
+mSD 
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    HSC)
+
+```
+
+VR
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    VR)
+
+```
+
+
+
+```{r, echo=FALSE, warning=FALSE}
+
+   PT = pairwise.wilcox.test(dataBreastAOV$DSC, dataBreastAOV$Method, paired=TRUE, p.adjust.method="holm")
+   print(PT)
+   
+   PT = pairwise.wilcox.test(dataBreastAOV$HSC, dataBreastAOV$Method, paired=TRUE, p.adjust.method="holm")
+   print(PT)
+   
+   PT = pairwise.wilcox.test(dataBreastAOV$VR, dataBreastAOV$Method, paired=TRUE, p.adjust.method="holm")
+   print(PT)
+
+```
+
+
+
+
+##### Repeatability analysis
+
+**GCGMM** 
+
+```{r, echo=FALSE, warning=FALSE}
+
+PT = pairwise.wilcox.test(dataGCGMM$DSC, dataGCGMM$Trial, paired = TRUE, p.adjust.method = "holm")
+print(PT)
+
+PT = pairwise.wilcox.test(dataGCGMM$HSC, dataGCGMM$Trial, paired = TRUE, p.adjust.method = "holm")
+print(PT)
+
+PT = pairwise.wilcox.test(dataGCGMM$VR, dataGCGMM$Trial, paired = TRUE, p.adjust.method = "holm")
+print(PT)
+
+```
+
+**GC**
+
+```{r, echo=FALSE, warning=FALSE}
+
+PT = pairwise.wilcox.test(dataGCVec$DSC, dataGCVec$Trial, paired = TRUE, p.adjust.method = "holm")
+print(PT)
+
+PT = pairwise.wilcox.test(dataGCVec$HSC, dataGCVec$Trial, paired = TRUE, p.adjust.method = "holm")
+print(PT)
+
+PT = pairwise.wilcox.test(dataGCVec$VR, dataGCVec$Trial, paired = TRUE, p.adjust.method = "holm")
+print(PT)
+
+```
+
+**FCM**
+
+```{r, echo=FALSE, warning=FALSE}
+
+PT = pairwise.wilcox.test(dataFCM$DSC, dataFCM$Trial, paired = TRUE, p.adjust.method = "holm")
+print(PT)
+
+PT = pairwise.wilcox.test(dataFCM$HSC, dataFCM$Trial, paired = TRUE, p.adjust.method = "holm")
+print(PT)
+
+PT = pairwise.wilcox.test(dataFCM$VR, dataFCM$Trial, paired = TRUE, p.adjust.method = "holm")
+print(PT)
+
+```
+
+
+##### Summarize the accuracies by trial for the two methods
+
+Summarize DSC by Trial and Method
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, Trial) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    DSC)
+
+```
+
+Summarize mSD by Method and Trial
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, Trial) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    HSC)
+
+```
+
+Summarize VR by Method and Trial
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, Trial) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    VR)
+
+```
+
+##### Accuracy differences for the methods by tumor subtype
+
+**DSC**
+```{r, echo=FALSE, warning=FALSE}
+
+  dscMeans <- aggregate(dataBreastAOV$DSC, by=list(PID=dataBreastAOV$PatientID, 
+                                                   Method = dataBreastAOV$Method, 
+                                                   Subtype = dataBreastAOV$SubType), 
+                        FUN=function(x) c(mean=mean(x)))
+  dscMeans <- do.call(data.frame, dscMeans)
+  
+  Method <- dscMeans$Method
+  Subtype = dscMeans$Subtype
+  dscMeans$MethodSubtype <- interaction(Method, Subtype)
+  
+  
+  PT = pairwise.wilcox.test(dscMeans$x, dscMeans$MethodSubtype, p.adjust.method = "holm")
+  print(PT)
+```
+
+**mSD**
+
+```{r, echo=FALSE, warning=FALSE}
+
+  hscMeans <- aggregate(dataBreastAOV$HSC, by=list(PID=dataBreastAOV$PatientID, 
+                                                   Method = dataBreastAOV$Method, 
+                                                   Subtype = dataBreastAOV$SubType), 
+                        FUN=function(x) c(mean=mean(x)))
+  hscMeans <- do.call(data.frame, hscMeans)
+  
+  Method <- hscMeans$Method
+  Subtype = hscMeans$Subtype
+  hscMeans$MethodSubtype <- interaction(Method, Subtype)
+  
+  
+  PT = pairwise.wilcox.test(hscMeans$x, hscMeans$MethodSubtype, p.adjust.method = "holm")
+  print(PT)
+  
+```
+
+**VR**
+
+```{r,echo=FALSE, warning=FALSE}
+  #### VR
+  vrMeans <- aggregate(dataBreastAOV$VR, by=list(PID=dataBreastAOV$PatientID, 
+                                                   Method = dataBreastAOV$Method, 
+                                                   Subtype = dataBreastAOV$SubType), 
+                        FUN=function(x) c(mean=mean(x)))
+  vrMeans <- do.call(data.frame, vrMeans)
+  
+  Method <- vrMeans$Method
+  Subtype = vrMeans$Subtype
+  vrMeans$MethodSubtype <- interaction(Method, Subtype)
+  
+  
+  PT = pairwise.wilcox.test(vrMeans$x, vrMeans$MethodSubtype, p.adjust.method = "holm")
+  print(PT)
+  
+```
+  
+
+Summarize DSC by Subtype and Method
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, SubType) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    DSC)
+
+```
+
+Summarize mSD by Method and SubType
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, SubType) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    HSC)
+
+```
+
+Summarize VR by Method and SubType
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, SubType) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    VR)
+
+```
+
+
+
+##### BAR PLOT WITH ERROR BARS BY Tumor subtype
+
+```{r, echo=FALSE, warning=FALSE}
+
+  dataBreastAOV <- droplevels(dataBreastAOV)
+
+  dscMeans <- aggregate(dataBreastAOV$DSC, by=list(Method = dataBreastAOV$Method, 
+                                                   Subtype = dataBreastAOV$SubType), 
+                        FUN = function(x) c(mean=mean(x), sd=sd(x), median=median(x), 
+                                          q25 = quantile(x,0.25), q75=quantile(x,0.75), n = length(x)))
+  dscMeans <- do.call(data.frame, dscMeans)
+  
+  dscMeans$se <- dscMeans$x.sd / sqrt(dscMeans$x.n)
+  colnames(dscMeans) <- c("Method", "SubType", "mean", "sd", "median", "q25", "q75", "n", "se")
+  
+  
+  hscMeans <- aggregate(dataBreastAOV$HSC, by=list(Method = dataBreastAOV$Method, 
+                                                   Subtype = dataBreastAOV$SubType), 
+                        FUN = function(x) c(mean=mean(x), sd=sd(x), median=median(x), 
+                                          q25 = quantile(x,0.25), q75=quantile(x,0.75), n = length(x)))
+  hscMeans <- do.call(data.frame, hscMeans)
+  
+  hscMeans$se <- pmin(1.0, hscMeans$x.sd / sqrt(hscMeans$x.n))
+  colnames(hscMeans) <- c("Method", "SubType", "mean", "sd", "median", "q25", "q75", "n", "se")
+  
+  
+  vrMeans <- aggregate(dataBreastAOV$VR, by=list( Method = dataBreastAOV$Method, 
+                                                   Subtype = dataBreastAOV$SubType), 
+                        FUN = function(x) c(mean=mean(x), sd=sd(x), median=median(x), 
+                                          q25 = quantile(x,0.25), q75=quantile(x,0.75), n = length(x)))
+  vrMeans <- do.call(data.frame, vrMeans)
+  
+  vrMeans$se <- vrMeans$x.sd / sqrt(vrMeans$x.n)
+  colnames(vrMeans) <- c("Method", "SubType", "mean", "sd", "median", "q25", "q75", "n", "se")
+
+  
+  par(mfrow=c(2,3), mar=c(4,5,3,1))
+  myData <- dscMeans
+
+  plotTop <- 1.1
+
+  tabbedMeans <- tapply(myData$mean, list(myData$Method,
+                                        myData$SubType),
+                        function(x) c(x = x))
+
+  tabbedSE <- tapply(myData$se, list(myData$Method,
+                                     myData$SubType),
+                     function(x) c(x = x))
+
+  barCenters <- barplot(height = tabbedMeans,
+                        beside = TRUE, las = 1,
+                        ylim = c(0, plotTop),
+                        cex.names = 1.0, cex.axis = 1.0, cex.lab = 1.5, 
+                        main = "(a) DSC By SubType",
+                        ylab = "Dice Coefficient",
+                        #xlab = "(a) ",
+                        col = c("powderblue", "royalblue", "cadetblue2"), border = "black", axes = TRUE,
+                        #col = c("skyblue4", "royalblue", "powderblue", "cadetblue2"), border = "black", axes = TRUE,
+                        legend.text = TRUE,
+                      args.legend = list(title = "Segmentation Method", 
+                                         x = "top", x.intersp = 0.7, y.intersp=0.7,
+                                         cex = 1.5, horiz=TRUE))
+
+  segments(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+           tabbedMeans + tabbedSE * 2, lwd = 1.5)
+
+  arrows(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+         tabbedMeans + tabbedSE * 2, lwd = 2.5, angle = 90,
+         code = 3, length = 0.1)
+
+  
+  myData <- hscMeans
+  
+  plotTop <- 10
+  tabbedMeans <- tapply(myData$mean, list(myData$Method,
+                                        myData$SubType),
+                        function(x) c(x = x))
+
+  tabbedSE <- tapply(myData$se, list(myData$Method,
+                                     myData$SubType),
+                     function(x) c(x = x))
+
+  barCenters <- barplot(height = tabbedMeans,
+                        beside = TRUE, las = 1,
+                        ylim = c(0, plotTop),
+                        cex.names = 0.9, cex.axis = 1.0, cex.lab = 1.5, 
+                        main = "(b) mSD By SubType",
+                        ylab = "mSD",
+                        #xlab = "(a) ",
+                        col = c("powderblue", "royalblue", "cadetblue2"), border = "black", axes = TRUE,
+                        #col = c("skyblue4", "royalblue", "powderblue", "cadetblue2"), border = "black", axes = TRUE,
+                        legend.text = TRUE,
+                      args.legend = list(title = "Segmentation Method", 
+                                         x = "top", x.intersp = 0.7, y.intersp=0.7,
+                                         cex = 1.5, horiz=TRUE))
+
+  segments(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+           tabbedMeans + tabbedSE * 2, lwd = 1.5)
+
+  arrows(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+         tabbedMeans + tabbedSE * 2, lwd = 2.5, angle = 90,
+         code = 3, length = 0.1)
+
+  
+  myData <- vrMeans
+  
+  plotTop <- 1.1
+
+  tabbedMeans <- tapply(myData$mean, list(myData$Method,
+                                        myData$SubType),
+                        function(x) c(x = x))
+
+  tabbedSE <- tapply(myData$se, list(myData$Method,
+                                     myData$SubType),
+                     function(x) c(x = x))
+
+  barCenters <- barplot(height = tabbedMeans,
+                        beside = TRUE, las = 1,
+                        ylim = c(0, plotTop),
+                        cex.names = 0.9, cex.axis = 1.0, cex.lab = 1.5, 
+                        main = "(c) VR By SubType",
+                        ylab = "Volume Ratio",
+                        #xlab = "(a) ",
+                        col = c("powderblue", "royalblue", "cadetblue2"), border = "black", axes = TRUE,
+                        #col = c("skyblue4", "royalblue", "powderblue", "cadetblue2"), border = "black", axes = TRUE,
+                        legend.text = TRUE,
+                      args.legend = list(title = "Segmentation Method", 
+                                         x = "top", x.intersp = 0.7, y.intersp=0.7,
+                                         cex = 1.5, horiz=TRUE))
+
+  segments(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+           tabbedMeans + tabbedSE * 2, lwd = 1.5)
+
+  arrows(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+         tabbedMeans + tabbedSE * 2, lwd = 2.5, angle = 90,
+         code = 3, length = 0.1)
+  
+  
+  ## By tumor enhancement and BPE 
+  
+  dscMeans <- aggregate(dataBreastAOV$DSC, by=list(Method = dataBreastAOV$Method, 
+                                                   BPE = dataBreastAOV$MildBPE,
+                                                   TumorEn = dataBreastAOV$MassEnhancing), FUN = function(x) c(mean=mean(x), sd=sd(x), median=median(x), 
+                                          q25 = quantile(x,0.25), q75=quantile(x,0.75), n = length(x)))
+  dscMeans <- do.call(data.frame, dscMeans)
+  
+  dscMeans$se <- dscMeans$x.sd / sqrt(dscMeans$x.n)
+  colnames(dscMeans) <- c("Method", "BPE", "TumorEn",  "mean", "sd", "median", "q25", "q75", "n", "se")
+  
+  dscMeans$names <- c(paste(dscMeans$BPE, "/", dscMeans$TumorEn))
+  
+  hscMeans <- aggregate(dataBreastAOV$HSC, by=list(Method = dataBreastAOV$Method, 
+                                                   BPE = dataBreastAOV$MildBPE, 
+                                                   TumorEn = dataBreastAOV$MassEnhancing), 
+                        FUN = function(x) c(mean=mean(x), sd=sd(x), median=median(x), 
+                                          q25 = quantile(x,0.25), q75=quantile(x,0.75), n = length(x)))
+  hscMeans <- do.call(data.frame, hscMeans)
+  
+  hscMeans$se <- pmin(1.0, hscMeans$x.sd / sqrt(hscMeans$x.n))
+  colnames(hscMeans) <- c("Method", "BPE", "TumorEn", "mean", "sd", "median", "q25", "q75", "n", "se")
+  
+  hscMeans$names <- c(paste(hscMeans$BPE, "/", dscMeans$TumorEn))
+  
+  vrMeans <- aggregate(dataBreastAOV$VR, by=list( Method = dataBreastAOV$Method, 
+                                                   BPE = dataBreastAOV$MildBPE, 
+                                                  TumorEn = dataBreastAOV$MassEnhancing), 
+                        FUN = function(x) c(mean=mean(x), sd=sd(x), median=median(x), 
+                                          q25 = quantile(x,0.25), q75=quantile(x,0.75), n = length(x)))
+  vrMeans <- do.call(data.frame, vrMeans)
+  
+  vrMeans$se <- vrMeans$x.sd / sqrt(vrMeans$x.n)
+  colnames(vrMeans) <- c("Method", "BPE", "TumorEn", "mean", "sd", "median", "q25", "q75", "n", "se")
+
+  vrMeans$names <- c(paste(vrMeans$BPE, "/", vrMeans$TumorEn))
+  
+  
+  myData <- dscMeans
+
+  plotTop <- 1.1
+
+  tabbedMeans <- tapply(myData$mean, list(myData$Method,
+                                        myData$names),
+                        function(x) c(x = x))
+
+  tabbedSE <- tapply(myData$se, list(myData$Method,
+                                     myData$names),
+                     function(x) c(x = x))
+
+  barCenters <- barplot(height = tabbedMeans,
+                        beside = TRUE, las = 1,
+                        ylim = c(0, plotTop),
+                        cex.names = 0.9, cex.axis = 1.0, cex.lab = 1.5, 
+                        main = "(d) DSC By Enhancement",
+                        ylab = "Dice Coefficient",
+                        #xlab = "(a) ",
+                        col = c("powderblue", "royalblue", "cadetblue2"), border = "black", axes = TRUE,
+                        #col = c("skyblue4", "royalblue", "powderblue", "cadetblue2"), border = "black", axes = TRUE,
+                        legend.text = TRUE,
+                      args.legend = list(title = "Segmentation Method", 
+                                         x = "top", x.intersp = 0.7, y.intersp=0.7,
+                                         cex = 1.5, horiz=TRUE))
+
+  segments(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+           tabbedMeans + tabbedSE * 2, lwd = 1.5)
+
+  arrows(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+         tabbedMeans + tabbedSE * 2, lwd = 2.5, angle = 90,
+         code = 3, length = 0.1)
+
+  
+  myData <- hscMeans
+  
+  plotTop <- 10
+
+  tabbedMeans <- tapply(myData$mean, list(myData$Method,
+                                        myData$names),
+                        function(x) c(x = x))
+
+  tabbedSE <- tapply(myData$se, list(myData$Method,
+                                     myData$names),
+                     function(x) c(x = x))
+
+  barCenters <- barplot(height = tabbedMeans,
+                        beside = TRUE, las = 1,
+                        ylim = c(0, plotTop),
+                        cex.names = 0.9, cex.axis = 1.0, cex.lab = 1.5, 
+                        main = "(e) mSD By Enhancement",
+                        ylab = "mSD",
+                        #xlab = "(a) ",
+                        col = c("powderblue", "royalblue", "cadetblue2"), border = "black", axes = TRUE,
+                        #col = c("skyblue4", "royalblue", "powderblue", "cadetblue2"), border = "black", axes = TRUE,
+                        legend.text = TRUE,
+                      args.legend = list(title = "Segmentation Method", 
+                                         x = "top", x.intersp = 0.7, y.intersp=0.7,
+                                         cex = 1.5, horiz=TRUE))
+
+  segments(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+           tabbedMeans + tabbedSE * 2, lwd = 1.5)
+
+  arrows(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+         tabbedMeans + tabbedSE * 2, lwd = 2.5, angle = 90,
+         code = 3, length = 0.1)
+
+  
+  myData <- vrMeans
+  
+  plotTop <- 1.1
+
+  tabbedMeans <- tapply(myData$mean, list(myData$Method,
+                                        myData$names),
+                        function(x) c(x = x))
+
+  tabbedSE <- tapply(myData$se, list(myData$Method,
+                                     myData$names),
+                     function(x) c(x = x))
+
+  barCenters <- barplot(height = tabbedMeans,
+                        beside = TRUE, las = 1,
+                        ylim = c(0, plotTop),
+                        cex.names = 0.9, cex.axis = 1.0, cex.lab = 1.5, 
+                        main = "(f) VR By Enhancement",
+                        ylab = "Volume Ratio",
+                        #xlab = "(a) ",
+                        col = c("powderblue", "royalblue", "cadetblue2"), border = "black", axes = TRUE,
+                        #col = c("skyblue4", "royalblue", "powderblue", "cadetblue2"), border = "black", axes = TRUE,
+                        legend.text = TRUE,
+                      args.legend = list(title = "Segmentation Method", 
+                                         x = "top", x.intersp = 0.7, y.intersp=0.7,
+                                         cex = 1.5, horiz=TRUE))
+
+  segments(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+           tabbedMeans + tabbedSE * 2, lwd = 1.5)
+
+  arrows(barCenters, tabbedMeans - tabbedSE * 2, barCenters,
+         tabbedMeans + tabbedSE * 2, lwd = 2.5, angle = 90,
+         code = 3, length = 0.1)
+  
+  
+
+```
+
+
+
+#### Differences in method accuracies by tumor enhancement pattern Mass vs. Non-Mass (NME) enhancement
+
+**DSC**
+```{r, echo=FALSE, warning=FALSE}
+
+  indxNA <- is.na(dataBreastAOV$MassEnhancing)
+  dscMeans <- aggregate(dataBreastAOV$DSC[!indxNA], 
+                        by=list(PID = dataBreastAOV$PatientID[!indxNA], 
+                        Method = dataBreastAOV$Method[!indxNA],
+                        Enhancement = dataBreastAOV$MassEnhancing[!indxNA]), 
+                        FUN = function(x) c(mean=mean(x)))
+  
+  Enhancement <- dscMeans$Enhancement
+  Method <- dscMeans$Method
+  
+  dscMeans$MethodEnhancement <- interaction(Method, Enhancement)
+  
+  PT = pairwise.wilcox.test(dscMeans$x, dscMeans$MethodEnhancement, p.adjust.method = "holm")
+  print(PT)
+  
+```
+
+**mSD**
+
+```{r, echo=FALSE, warning=FALSE}
+  #Summarize(x ~ Enhancement * Method, data=dscMeans)
+  
+  hscMeans <- aggregate(dataBreastAOV$HSC[!indxNA], 
+                        by =list(PID = dataBreastAOV$PatientID[!indxNA], 
+                        Method = dataBreastAOV$Method[!indxNA],
+                        Enhancement = dataBreastAOV$MassEnhancing[!indxNA]), 
+                        FUN = function(x) c(mean=mean(x)))
+  
+  Enhancement <- hscMeans$Enhancement
+  Method <- hscMeans$Method
+  hscMeans$MethodEnhancement <- interaction(Method, Enhancement)
+
+  PT = pairwise.wilcox.test(hscMeans$x, hscMeans$MethodEnhancement, p.adjust.method = "holm")
+  print(PT)
+  
+```
+
+**VR**
+
+```{r, echo=FALSE, warning=FALSE}
+
+  #Summarize(x ~ Enhancement * Method, data = hscMeans)
+  
+  vrMeans <- aggregate(dataBreastAOV$VR[!indxNA], 
+                        by =list(PID = dataBreastAOV$PatientID[!indxNA], 
+                        Method = dataBreastAOV$Method[!indxNA],
+                        Enhancement = dataBreastAOV$MassEnhancing[!indxNA]), 
+                        FUN = function(x) c(mean=mean(x)))
+  Enhancement <- vrMeans$Enhancement
+  Method <- vrMeans$Method
+  
+  vrMeans$MethodEnhancement <- interaction(Method, Enhancement)
+  PT = pairwise.wilcox.test(vrMeans$x, vrMeans$MethodEnhancement, p.adjust.method = "holm")
+  print(PT)
+  
+ # Summarize(x ~ Enhancement * Method, data = vrMeans)
+  
+```
+
+Summarize DSC by Method and Enhancement
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, MassEnhancing) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    DSC)
+```
+
+Summarize HSC by Method and Enhancement
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, MassEnhancing) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    HSC)
+```
+
+
+Summarize VR by Method and Enhancement
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, MassEnhancing) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    VR)
+```
+
+Summarize DSC by Method and BPE
+
+```{r, echo=FALSE, warning=FALSE}
+dataBreastAOV %>%
+    group_by(Method, MildBPE) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    DSC)
+
+
+```
+
+Summarize mSD by Method and Enhancement
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, MassEnhancing, MildBPE) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    HSC)
+
+```
+
+Summarize HSC by Method and BPE
+
+```{r, echo=FALSE, warning=FALSE}
+dataBreastAOV %>%
+    group_by(Method, MildBPE) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    HSC)
+
+
+```
+
+Summarize VR by Method and Enhancement
+
+```{r, echo=FALSE, warning=FALSE}
+
+dataBreastAOV %>%
+    group_by(Method, MassEnhancing, MildBPE) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    VR)
+
+```
+
+Summarize VR by Method and BPE
+
+```{r, echo=FALSE, warning=FALSE}
+dataBreastAOV %>%
+    group_by(Method, MildBPE) %>%
+    summarize_each(funs(
+    Q1_,
+    median_,
+    Q3_,
+    mean_,
+    sd_), 
+    VR)
+
+
+```
+
+
+
+#### Differences in accuracies by background parenchymal enhancement
+
+**DSC**
+
+```{r, echo=FALSE, warning=FALSE}
+
+  indxNA <- is.na(dataBreastAOV$MildBPE)
+  dscMeans <- aggregate(dataBreastAOV$DSC[!indxNA], 
+                        by=list(PID = dataBreastAOV$PatientID[!indxNA], 
+                        Method = dataBreastAOV$Method[!indxNA],
+                        Enhancement = dataBreastAOV$MildBPE[!indxNA]), 
+                        FUN = function(x) c(mean=mean(x)))
+  
+  Enhancement <- dscMeans$Enhancement
+  Method <- dscMeans$Method
+  
+  dscMeans$MethodEnhancement <- interaction(Method, Enhancement)
+  PT = pairwise.wilcox.test(dscMeans$x, dscMeans$MethodEnhancement, p.adjust.method = "holm")
+  print(PT)
+
+```
+
+**mSD**
+
+```{r,echo=FALSE,warning=FALSE}
+    #Summarize(x ~ Enhancement * Method, data=dscMeans)
+  
+  hscMeans <- aggregate(dataBreastAOV$HSC[!indxNA], 
+                        by=list(PID = dataBreastAOV$PatientID[!indxNA], 
+                        Method = dataBreastAOV$Method[!indxNA],
+                        Enhancement = dataBreastAOV$MildBPE[!indxNA]), 
+                        FUN = function(x) c(mean=mean(x)))
+  
+  Enhancement <- hscMeans$Enhancement
+  Method <- hscMeans$Method
+  hscMeans$MethodEnhancement <- interaction(Method, Enhancement)
+  # There was a significant difference between the methods for both Mass GC v. GCGMM P <0.0001 and NME tumours GC vs. GCGMM P = 0.0035
+  # There was no difference in the methods for the different enhancements Mass GC vs. GCGMM P = 1.0, NME GC vs. GCGMM P= 1.0
+  PT = pairwise.wilcox.test(hscMeans$x, hscMeans$MethodEnhancement, p.adjust.method = "holm")
+  print(PT)
+  
+```
+
+**VR**
+
+```{r,echo=FALSE,warning=FALSE}
+  
+  
+  vrMeans <- aggregate(dataBreastAOV$VR[!indxNA], 
+                        by=list(PID = dataBreastAOV$PatientID[!indxNA], 
+                        Method = dataBreastAOV$Method[!indxNA],
+                        Enhancement = dataBreastAOV$MildBPE[!indxNA]), 
+                        FUN = function(x) c(mean=mean(x)))
+  
+  Enhancement <- vrMeans$Enhancement
+  Method <- vrMeans$Method
+  
+  vrMeans$MethodEnhancement <- interaction(Method, Enhancement)
+  PT = pairwise.wilcox.test(vrMeans$x, vrMeans$MethodEnhancement, p.adjust.method = "holm")
+  print(PT)
+  
+  
+```
+
+
+
+Count the mSD
+
+```{r, echo=FALSE, warning=FALSE}
+
+  breaks <- seq(min(dataGCGMM$HSC, dataGCVec$HSC), 5, 0.3) 
+  breaksHSC <- breaks
+  
+  countBreaksHSC <- data.frame(breaks, rep(0, length(breaks)), 
+                   rep(0, length(breaks)), rep(0, length(breaks)))
+  colnames(countBreaksHSC) <- c("HSC", "GCGMMCounts", "GCVecCounts", "FCMCounts")
+  
+   for (i in 1 : length(breaks))
+  {
+    
+    if(i == length(breaks)) {
+      indx <- dataGCGMM$HSC >= breaks[i]
+      
+    }else {
+      
+      indx <- dataGCGMM$HSC >= breaks[i] & dataGCGMM$HSC < breaks[i+1]
+    }
+    countBreaksHSC$GCGMMCounts[i] <- sum(as.numeric(indx))
+    
+    if(i == length(breaks)) {
+      indx <- dataGCVec$HSC >= breaks[i]
+      
+    }else {
+      
+      indx <- dataGCVec$HSC >= breaks[i] & dataGCVec$HSC < breaks[i+1]
+    }
+    countBreaksHSC$GCVecCounts[i] <- sum(as.numeric(indx))
+    
+    if(i == length(breaks)) {
+      indx <- dataFCM$HSC >= breaks[i]
+      
+    }else {
+      
+      indx <- dataFCM$HSC >= breaks[i] & dataFCM$HSC < breaks[i+1]
+    }
+    countBreaksHSC$FCMCounts[i] <- sum(as.numeric(indx))
+  }  
+ 
+  
+```
+
+
+Count the DSC 
+
+```{r, echo=FALSE, warning=FALSE}
+
+  breaks <- seq(0,1,0.1)
+  breaksDSC <- breaks
+  countBreaksDSC <- data.frame(breaks, rep(0, length(breaks)), 
+                   rep(0, length(breaks)), rep(0, length(breaks)))
+  colnames(countBreaksDSC) <- c("VR", "GCGMMCounts", "GCVecCounts", "FCMCounts")
+  
+  for (i in 1 : length(breaks))
+  {
+    
+    if(i == length(breaks)) {
+      indx <- dataGCGMM$DSC >= breaks[i]
+      
+    }else {
+      
+      indx <- dataGCGMM$DSC >= breaks[i] & dataGCGMM$DSC < breaks[i+1]
+    }
+    countBreaksDSC$GCGMMCounts[i] <- sum(as.numeric(indx))
+    
+    if(i == length(breaks)) {
+      indx <- dataGCVec$DSC >= breaks[i]
+      
+    }else {
+      
+      indx <- dataGCVec$DSC >= breaks[i] & dataGCVec$DSC < breaks[i+1]
+    }
+    countBreaksDSC$GCVecCounts[i] <- sum(as.numeric(indx))
+    
+    if(i == length(breaks)) {
+      indx <- dataFCM$DSC >= breaks[i]
+      
+    }else {
+      
+      indx <- dataFCM$DSC >= breaks[i] & dataFCM$DSC < breaks[i+1]
+    }
+    countBreaksDSC$FCMCounts[i] <- sum(as.numeric(indx))
+  }  
+  
+
+```
+
+Count VR
+
+```{r, echo=FALSE, warning=FALSE}
+
+  breaks <- seq(-1, 1, 0.1) 
+  breaksVR = breaks
+
+  countBreaksVR <- data.frame(breaks, rep(0, length(breaks)), 
+                   rep(0, length(breaks)), rep(0, length(breaks)))
+  colnames(countBreaksVR) <- c("VR", "GCGMMCounts", "GCVecCounts", "FCMCounts")
+  
+   for (i in 1 : length(breaks))
+  {
+    
+    if(i == length(breaks)) {
+      indx <- dataGCGMM$VRnotABS >= breaks[i]
+      
+    }else {
+      
+      indx <- dataGCGMM$VRnotABS >= breaks[i] & dataGCGMM$VRnotABS < breaks[i+1]
+    }
+    countBreaksVR$GCGMMCounts[i] <- sum(as.numeric(indx))
+    
+    if(i == length(breaks)) {
+      indx <- dataGCVec$VRnotABS >= breaks[i]
+      
+    }else {
+      
+      indx <- dataGCVec$VRnotABS >= breaks[i] & dataGCVec$VRnotABS < breaks[i+1]
+    }
+    countBreaksVR$GCVecCounts[i] <- sum(as.numeric(indx))
+    
+    if(i == length(breaks)) {
+      indx <- dataFCM$VRnotABS >= breaks[i]
+      
+    }else {
+      
+      indx <- dataFCM$VRnotABS >= breaks[i] & dataFCM$VRnotABS < breaks[i+1]
+    }
+    countBreaksVR$FCMCounts[i] <- sum(as.numeric(indx))
+   } 
+  
+```
+  
+  
+Display all the bar plots
+
+```{r, echo=FALSE, warning=FALSE}
+
+  par(mfrow=c(1,3), c(5,4,3,1))
+  
+  breaks = breaksVR
+  cf <- data.frame(c(breaks, breaks, breaks), c(countBreaksVR$GCGMMCounts, countBreaksVR$GCVecCounts, countBreaksVR$FCMCounts), c(rep("GCGMM", length(breaks)), rep("GC", length(breaks)), rep("FCM", length(breaks))))
+  
+  colnames(cf) <- c("VR", "Count", "Method")
+  cf$normCount <- cf$Count/nrow(dataGCGMM)
+
+  p1 <- ggplot(cf, aes(VR,Count)) + geom_bar(aes(fill = Method), position = "dodge", stat = "identity") +theme_classic() + 
+    xlab("VR") + ylab("Number of cases") + theme(text=element_text(size=18), axis.text.x = element_text(size=18),
+      axis.text.y = element_text(size=18), legend.position = c(0.8, 0.8),
+      legend.background = element_rect(linetype = "solid", color="black"))
+  
+  
+  breaks <- breaksDSC
+  
+  cf <- data.frame(c(breaks, breaks, breaks), c(countBreaksDSC$GCGMMCounts, countBreaksDSC$GCVecCounts, countBreaksDSC$FCMCounts), c(rep("GCGMM", length(breaks)), rep("GC", length(breaks)), rep("FCM", length(breaks))))
+  
+  colnames(cf) <- c("DSC", "Count", "Method")
+  cf$normCount <- cf$Count/nrow(dataGCGMM)
+
+   p2 <- ggplot(cf, aes(DSC,Count)) + geom_bar(aes(fill = Method), position = "dodge", stat = "identity") + theme_classic() +
+    xlab("DSC") + ylab("Number of cases") + theme(text=element_text(size=18), axis.text.x = element_text(size=18), 
+      axis.text.y = element_text(size=18), legend.position = c(0.9, 0.8),
+      legend.background = element_rect(linetype = "solid", color="black"))
+  
+  
+  breaks <- breaksHSC
+  
+  cf <- data.frame(c(breaks, breaks, breaks), c(countBreaksHSC$GCGMMCounts, countBreaksHSC$GCVecCounts, countBreaksHSC$FCMCounts), c(rep("GCGMM", length(breaks)), rep("GC", length(breaks)), rep("FCM", length(breaks))))
+  
+  colnames(cf) <- c("HSC", "Count", "Method")
+  cf$normCount <- cf$Count/nrow(dataGCGMM)
+
+  p3 <- ggplot(cf, aes(HSC,Count)) + geom_bar(aes(fill = Method), position = "dodge", stat = "identity") + theme_classic() +
+    xlab("mSD (mm)") + ylab("Number of cases") + theme(text=element_text(size=18), axis.text.x = element_text(size=18), 
+      axis.text.y = element_text(size=18), legend.position = c(0.9, 0.8),
+      legend.background = element_rect(linetype = "solid", color="black"))
+  
+  multiplot(p1,p2,p3,cols=1)
+  
+  
+```
+
+
+Was there a difference in volumes by sub-types using manual delineation?
+
+```{r, echo=FALSE, warning=FALSE}
+
+  dataROI <- dataGCGMM[dataGCGMM$Trial=="Rect",]
+  dataROI <- droplevels(dataROI)
+  
+  dataROI%>%
+  ggplot(aes(x = SubType, y = Volume.GroundTruth)) + geom_boxplot() +
+    stat_summary(fun.data = n_fun, fun.args = 25, geom = "text")
+  
+
+print(pairwise.wilcox.test(dataROI$Volume.GroundTruth, dataROI$SubType, p.adjust.method = "holm"))
+
+```
+
+Was there a difference in volumes by sub-types using GCGMM?
+
+```{r, echo=FALSE, warning=FALSE}
+
+  dataROI <- dataGCGMM[dataGCGMM$Trial=="ForeBack",]
+  dataROI <- droplevels(dataROI)
+  
+  dataROI%>%
+  ggplot(aes(x = SubType, y = Volumes)) + geom_boxplot() +
+    stat_summary(fun.data = n_fun, fun.args = 25, geom = "text")
+  
+
+print(pairwise.wilcox.test(dataROI$Volumes, dataROI$SubType, p.adjust.method = "holm"))
+
+```
+
+Was there a difference in volumes by sub-types using GC?
+
+```{r, echo=FALSE, warning=FALSE}
+
+  dataROI <- dataGCVec[dataGCGMM$Trial=="ForeBack",]
+  dataROI <- droplevels(dataROI)
+  
+  dataROI%>%
+  ggplot(aes(x = SubType, y = Volumes)) + geom_boxplot() +
+    stat_summary(fun.data = n_fun, fun.args = 25, geom = "text")
+  
+
+print(pairwise.wilcox.test(dataROI$Volumes, dataROI$SubType, p.adjust.method = "holm"))
+
+```
+
+
+Was there a difference in volumes by sub-types using FCM?
+
+```{r, echo=FALSE, warning=FALSE}
+
+  dataROI <- dataFCM[dataFCM$Trial=="ForeBack",]
+  dataROI <- droplevels(dataROI)
+  
+  dataROI%>%
+  ggplot(aes(x = SubType, y = Volumes)) + geom_boxplot() +
+    stat_summary(fun.data = n_fun, fun.args = 25, geom = "text")
+  
+
+print(pairwise.wilcox.test(dataROI$Volumes, dataROI$SubType, p.adjust.method = "holm"))
+
+```
+
+
+###Repeatability of texture measures by methods
+
+```{r, echo=FALSE, warning=FALSE}
+
+  require(irr)
+
+  #clin.data <- read.csv("textureFeatures.csv")
+  clin.data <- read.csv("SIDataFile2.csv")
+  gcgmm.data <- clin.data[clin.data$Method=="GCGMM",]
+  gcvec.data <- clin.data[clin.data$Method=="GCVec",]
+  fcm.data <- clin.data[clin.data$Method=="FCM",]
+  
+  fnames <- names(clin.data[5:ncol(clin.data)])
+  nfeats <- length(fnames)
+  ICCVals <- data.frame(fnames, rep(0,nfeats), rep(0,nfeats), rep(0,nfeats), rep(0, nfeats), rep(0,nfeats), rep(0,nfeats), 
+                        rep(0,nfeats), rep(0,nfeats), rep(0,nfeats))
+  colnames(ICCVals) <- c("Feature", "FCM.ICC", "FCM.LI", "FCM.UI", "GCVec.ICC", "GCVec.LI", "GCVec.UI", "GCGMM.ICC", "GCGMM.LI", "GCGMM.UI")
+  
+  for(i in 1 : nfeats) {
+    gdata <- data.frame(gcgmm.data[gcgmm.data$Trial=="Contour",i+4], gcgmm.data[gcgmm.data$Trial=="Foreback",i+4], 
+                        gcgmm.data[gcgmm.data$Trial=="Rect",i+4])
+    colnames(gdata) <- c("Contour", "Foreback", "Rect")
+    ic <- icc(gdata, model="twoway", type="agreement")
+    ICCVals$GCGMM.ICC[i] <- ic$value
+    ICCVals$GCGMM.LI[i] <- ic$lbound
+    ICCVals$GCGMM.UI[i] <- ic$ubound
+    
+    gdata <- data.frame(gcvec.data[gcvec.data$Trial=="Contour",i+4], gcvec.data[gcvec.data$Trial=="Foreback",i+4], 
+                        gcvec.data[gcvec.data$Trial=="Rect",i+4])
+    colnames(gdata) <- c("Contour", "Foreback", "Rect")
+    ic <- icc(gdata, model="twoway", type="agreement")
+    ICCVals$GCVec.ICC[i] <- ic$value
+    ICCVals$GCVec.LI[i] <- ic$lbound
+    ICCVals$GCVec.UI[i] <- ic$ubound
+    
+    gdata <- data.frame(fcm.data[fcm.data$Trial=="Contour",i+4], fcm.data[fcm.data$Trial=="Foreback",i+4], 
+                        fcm.data[fcm.data$Trial=="Rect",i+4])
+    colnames(gdata) <- c("Contour", "Foreback", "Rect")
+    ic <- icc(gdata, model="twoway", type="agreement")
+    ICCVals$FCM.ICC[i] <- ic$value
+    ICCVals$FCM.LI[i] <- ic$lbound
+    ICCVals$FCM.UI[i] <- ic$ubound
+    
+  } 
+  indxGCGMM <- ICCVals$GCGMM.ICC >= ICCVals$FCM.ICC
+  indxFCM <- ICCVals$FCM.ICC >= ICCVals$GCGMM.ICC
+  
+  kable(ICCVals, digits = 2, align="l")
+  
+  
+```
+
+Plot the ICCvals as bar plots
+
+```{r, echo=FALSE, warning=FALSE}
+  fnames <- ICCVals$Feature
+  ICCmeans <- data.frame(c(as.vector(fnames), as.vector(fnames), as.vector(fnames)), c(ICCVals$FCM.ICC, ICCVals$GCVec.ICC, ICCVals$GCGMM.ICC), c(rep("FCM", 36), rep("GC", 36), rep("GCGMM",36)))
+
+  colnames(ICCmeans) <- c("Feature", "ICC", "Method")
+  
+  tabbedICC <- tapply(ICCmeans$ICC, list(ICCmeans$Method, ICCmeans$Feature), function(x) c(x=x))
+  
+  mar.default <- c(8,2,2,2) + 0.2
+  par(mar = mar.default + c(0, 1, 0, 0)) 
+ 
+  labels <- as.vector(fnames)
+  barCenters <- barplot(height = tabbedICC, width = 3.0,
+                        beside = TRUE, las = 2,
+                        ylim = c(0, 1.1),
+                        cex.names = 1.0, cex.axis = 1.0, cex.lab = 1.05, 
+                        main = "ICC for textures computed using different segmentations",
+                        ylab = "Inter-class correlaton coefficient (ICC)",
+                        #xlab = "(a) ",
+                        col = c("coral1", "cadetblue1", "darkblue"), 
+                        border = "black", axes = TRUE,
+                        legend.text = TRUE,
+                        args.legend = list(title = "Segmentation Method", 
+                                         x = "top", x.intersp = 0.7, y.intersp=0.8,
+                                         cex = 1.05, horiz=TRUE))
+  #axis(1, labels=FALSE)
+  #text(x=seq(1,length(ICCmeans$Feature), 3)*1.35, y=par("usr")[3] - 0.005, srt = 90, 
+  #   adj = 1, labels = labels, xpd = TRUE, font=1)
+
+  abline(h=0.8, col="black", lty=3,lwd=2)
+  
+  PT <- pairwise.wilcox.test(ICCmeans$ICC, ICCmeans$Method, p.adjust.method = "holm")
+  print(PT)
+  
+```
+
+
+
+####Test whether the features extracted through different segmentations result in variable accuracies for classification? 
+
+All analyses use 150% augmentation
+
+```{r, echo=FALSE, warning=FALSE}
+
+GTAcc <- data.frame(c("HER2vs.notHER2", "ERPRvs.TN"), c(rep(0,2)), c(rep(0,2)), c(rep(0,2)), c(rep(0, 2)), c(rep(0,2)), c(rep(0,2)), c(rep(0,2)),c(rep(0,2)))
+colnames(GTAcc) <- c("Classifier", "TP(num)", "TN(num)", "YI","TPR", "TNR", "FPR", "FNR", "AUC")
+
+GCAcc <- data.frame(c("HER2vs.notHER2", "ERPRvs.TN"), c(rep(0,2)), c(rep(0,2)), c(rep(0,2)), c(rep(0, 2)), c(rep(0,2)), c(rep(0,2)), c(rep(0,2)),c(rep(0,2)))
+colnames(GCAcc) <- c("Classifier", "TP(num)", "TN(num)",  "YI", "TPR", "TNR", "FPR", "FNR", "AUC")
+
+GCGMMAcc <- data.frame(c("HER2vs.notHER2", "ERPRvs.TN"), c(rep(0,2)), c(rep(0,2)), c(rep(0,2)), c(rep(0, 2)), c(rep(0,2)), c(rep(0,2)), c(rep(0,2)),c(rep(0,2)))
+colnames(GCGMMAcc) <- c("Classifier", "TP(num)", "TN(num)", "YI",  "TPR", "TNR", "FPR", "FNR", "AUC")
+
+FCMAcc <- data.frame(c("HER2vs.notHER2", "ERPRvs.TN"), c(rep(0,2)), c(rep(0,2)), c(rep(0,2)), c(rep(0, 2)), c(rep(0,2)), c(rep(0,2)), c(rep(0,2)),c(rep(0,2)))
+colnames(FCMAcc) <- c("Aug Type", "TP(num)", "TN(num)", "YI",  "TPR", "TNR", "FPR", "FNR", "AUC")
+
+
+adjPvals <- data.frame(rep("name",5), rep("0",5), rep("0",5), rep("0",5))
+colnames(adjPvals) <- c("GT.Feature", "FCM.Feature", "GC.Feature",  "GCGMM.Feature")
+
+
+nrFolds <- 5
+dropIndx <- c("SubType", "Method")
+  
+set.seed(1000)
+numTrees = 100
+
+```
+
+**Testing with 150% Data augmentation**
+
+```{r, echo=FALSE, warning=FALSE}
+
+ 
+ # clin.features <- read.csv("textureFeaturesClassAug150GC.csv")
+  clin.features <- read.csv("SIDataFile3.csv")
+
+  indxNotHER2 <- clin.features$SubType == -1
+  clin.features$SubType[indxNotHER2] = 2
+  
+  GT.features <- clin.features[clin.features$Method == "GT",]
+  GC.features <- clin.features[clin.features$Method == "GC",]
+  GCGMM.features <- clin.features[clin.features$Method == "GCGMM",]
+  FCM.features <- clin.features[clin.features$Method=="FCM",]
+  
+  dropIndx <- c("SubType", "Method")
+  
+  nrFolds <- nrow(GT.features)-1
+  
+```
+
+**Manual**
+
+```{r, echo=FALSE, warning=FALSE}
+  
+  clin.features <- GT.features
+  Response <- as.factor(clin.features$SubType)
+  
+ ResponseHER2 <- Response
+  ## produce cross validated folds
+
+  folds <- rep_len(1:nrFolds, nrow(clin.features))
+  rfResponse <- Response * 0
+  rfProb <- rfResponse
+  
+  varImpGini <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  varImpFeatures <- colnames(clin.features[!names(clin.features) %in% dropIndx])
+  varImpAcc <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  
+  for(k in 1 : nrFolds) {
+    
+    fold <- which(folds==k)
+    data.train <- clin.features[-fold,]
+    y <- Response[-fold]
+    data.test <- clin.features[fold,]
+    ytest <- Response[fold]
+    
+    ## train and test the RF classifier
+    rf <- randomForest(as.factor(y) ~., data=data.train[,!names(data.train) %in% dropIndx], importance=TRUE, ntree=numTrees, norm.votes = TRUE)
+    imp <- importance(rf)
+    d <- data.frame(imp)
+    varImpGini <- varImpGini + d$MeanDecreaseGini
+    varImpAcc <- varImpAcc + d$MeanDecreaseAccuracy
+    
+    impvar <- rownames(imp)[order(imp[, 1], decreasing=TRUE)]
+    
+ #   varImpPlot(rf, n.var = 10, pch = 15, cex=.75, color=c("darkblue"))
+    
+    ## predict
+    res <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="response", norm.votes = TRUE)
+    rfResponse[fold] <- res
+    prob <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="prob", norm.votes = TRUE)
+    rfProb[fold] <- prob
+  }
+  
+  ## consolidate the results
+  r <- data.frame(ClassifiedProb = rfProb, ClassLabel = rfResponse, TrueClass = Response)
+  
+  
+  impvarGini <- varImpFeatures
+  indxImp <- order(varImpGini, decreasing=FALSE)
+  
+  indxImpGiniGT = indxImp
+  
+  mar.default <- c(5,4,4,2) + 0.1
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+  
+  impvarAcc <- varImpFeatures
+  indxImp <- order(varImpAcc, decreasing=FALSE)
+  
+  indxImpAccGT = indxImp
+  
+  dotchart(varImpAcc[indxImp], labels=impvarAcc[indxImp], cex=0.9, main = "Accuracy", xlab="Mean decrease accuracy", lwd=2, col="darkblue", pch=15)
+  
+  varImpAccGT = varImpAcc
+  varImgGiniGT = varImpGini
+  
+  rfGTHER2 <- rfResponse
+  rfGTProbHER2 <- rfProb
+  
+  
+```
+
+Compute ROC curve for the prediction using GT
+
+```{r, echo=FALSE}
+
+  r1 <- roc(Response ~ rfProb, smooth=TRUE)
+  print(r1$auc)
+  ci(r1$auc)
+ # plot(r1, col="blue")
+  
+  ## confusion matrix
+  t <- table(rfResponse==1, Response==1)
+  colnames(t) <- paste(c("HER2-", "HER2+"))
+  rownames(t) <- paste(c("DetHER2-", "DetHER2+"))
+  
+ # t <- t/sum(t[,1])
+  t[,1] <- t[,1]/sum(t[,1])
+  t[,2] <- t[,2]/sum(t[,2])
+  print(t)
+  
+  tGT <- t
+  
+  GTAcc[1,2:ncol(GTAcc)] <- c(sum(as.numeric(Response==1)), sum(as.numeric(Response==2)), t[4]+t[1]-1, t[4], t[1], t[2], t[3], r1$auc)
+  
+```
+
+
+Assess whether any of the top five featues are significantly different between the two groups
+
+```{r, echo=FALSE, warning=FALSE}
+
+   #texturedata <- read.csv("textureFeaturesClassNoAugGC.csv")
+   texturedata <- read.csv("SIDataFile4.csv")
+   gt.data <- texturedata[texturedata$Method=="GT",]
+   indxImp <- indxImpGiniGT
+  
+   dropIndx <- c("SubType", "Method")  
+   features <- gt.data[, !names(gt.data)%in%dropIndx] 
+   fnames <- names(features)
+   
+   pvals = rep(0,5)
+   for (i in  32:36) {
+    print(fnames[indxImp[i]])
+     p <- tidy(wilcox.test(features[,indxImp[i]] ~ gt.data$SubType))%>%
+       select(p.value)
+     pvals[i-31] <- p$p.value
+   }
+   pvals <- p.adjust(pvals)
+  # 
+  fnames <- names(GT.features[!names(GT.features)%in%dropIndx])
+  adjPvals$GT.Feature <- fnames[indxImp[32:36]]
+  adjPvals$GT.P <- pvals
+
+  
+```
+
+
+  
+**FCM features**
+
+
+```{r, echo=FALSE, warning=FALSE}
+  
+  clin.features <- FCM.features
+  Response <- as.factor(clin.features$SubType)
+
+  ## produce cross validated folds
+  
+  folds <- rep_len(1:nrFolds, nrow(clin.features))
+  rfResponse <- Response * 0
+  rfProb <- rfResponse
+  
+  varImpGini <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  varImpFeatures <- colnames(clin.features[!names(clin.features) %in% dropIndx])
+  varImpAcc <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  
+  for(k in 1 : nrFolds) {
+    
+    fold <- which(folds==k)
+    data.train <- clin.features[-fold,]
+    y <- Response[-fold]
+    data.test <- clin.features[fold,]
+    ytest <- Response[fold]
+    
+    ## train and test the RF classifier
+    rf <- randomForest(as.factor(y) ~., data=data.train[,!names(data.train) %in% dropIndx], importance=TRUE, ntree=numTrees, norm.votes = TRUE)
+    imp <- importance(rf)
+    d <- data.frame(imp)
+    varImpGini <- varImpGini + d$MeanDecreaseGini
+    varImpAcc <- varImpAcc + d$MeanDecreaseAccuracy
+    
+    impvar <- rownames(imp)[order(imp[, 1], decreasing=TRUE)]
+    
+#    varImpPlot(rf, n.var = 10, pch = 15, cex=.75, color=c("darkblue"))
+    
+    ## predict
+    res <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="response", norm.votes = TRUE)
+    rfResponse[fold] <- res
+    prob <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="prob", norm.votes = TRUE)
+    rfProb[fold] <- prob
+  }
+  
+  ## consolidate the results
+  r <- data.frame(ClassifiedProb = rfProb, ClassLabel = rfResponse, TrueClass = Response)
+  
+  
+  impvarGini <- varImpFeatures
+  indxImp <- order(varImpGini, decreasing=FALSE)
+  indxImpGiniFCM = indxImp
+  
+  mar.default <- c(5,4,4,2) + 0.1
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+  
+ impvarAcc <- varImpFeatures
+ indxImp <- order(varImpAcc, decreasing=FALSE)
+  
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+ 
+  dotchart(varImpAcc[indxImp], labels=impvarAcc[indxImp], cex=0.9, main = "Accuracy", xlab="Mean decrease accuracy", lwd=2, col="darkblue", pch=15)
+  
+  rfFCMHER2 <- rfResponse
+  rfFCMProbHER2 <- rfProb
+  
+```
+
+Compute ROC curve for the prediction using FCM
+
+```{r, echo=FALSE}
+
+
+  r1 <- roc(Response ~ rfProb, smooth=TRUE)
+  print(r1$auc)
+  ci(r1$auc)
+  
+  p <- performance(prediction(rfFCMHER2, ResponseHER2), "tpr", "tnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+  p <- performance(prediction(rfFCMHER2, ResponseHER2), "fpr", "fnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+ # plot(r1, col="blue")
+  
+  ## confusion matrix
+  t <- table(rfResponse==1, Response==1)
+   colnames(t) <- paste(c("HER2-", "HER2+"))
+  rownames(t) <- paste(c("DetHER2-", "DetHER2+"))
+  
+  
+#  t <- t/sum(t[,1])
+  t[,1] <- t[,1]/sum(t[,1])
+  t[,2] <- t[,2]/sum(t[,2])
+  print(t)
+  
+  FCMAcc[1,2:ncol(FCMAcc)] <- c(sum(as.numeric(Response==1)), sum(as.numeric(Response==2)), t[4]+t[1]-1, t[4], t[1], t[2], t[3], r1$auc)
+  
+  tFCM <- t
+```
+
+Assess whether any of the top five featues are significantly different between the two groups
+
+```{r, echo=FALSE, warning=FALSE}
+
+  fcm.data <- texturedata[texturedata$Method=="FCM",]
+  
+  
+  dIndex <- c("PID", "Method", "Trial", "SubType")
+  features <- fcm.data[, !names(fcm.data)%in%dIndex]
+  fnames <- names(features)
+  
+  indxImp <- indxImpGiniFCM
+   pvals = rep(0,5)
+  for (i in  32:36) {
+    #print(fnames[indxImp[i]])
+    p <- tidy(wilcox.test(features[,indxImp[i]] ~ fcm.data$SubType))%>%
+      select(p.value)
+    pvals[i-31] <- p$p.value
+  }
+  pvals <- p.adjust(pvals)
+  
+  adjPvals$FCM.Feature <- fnames[indxImp[32:36]]
+  adjPvals$FCM.P <- pvals
+
+```
+
+
+**What is the accuracy when using Grow Cut-based features ?** 
+
+
+```{r, echo=FALSE, warning=FALSE}
+  
+  clin.features <- GC.features
+  Response <- as.factor(clin.features$SubType)
+
+  ## produce cross validated folds
+ 
+  folds <- rep_len(1:nrFolds, nrow(clin.features))
+  rfResponse <- Response * 0
+  rfProb <- rfResponse
+  
+  varImpGini <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  varImpFeatures <- colnames(clin.features[!names(clin.features) %in% dropIndx])
+  varImpAcc <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  
+  for(k in 1 : nrFolds) {
+    
+    fold <- which(folds==k)
+    data.train <- clin.features[-fold,]
+    y <- Response[-fold]
+    data.test <- clin.features[fold,]
+    ytest <- Response[fold]
+    
+    ## train and test the RF classifier
+    rf <- randomForest(as.factor(y) ~., data=data.train[,!names(data.train) %in% dropIndx], importance=TRUE, ntree=numTrees, norm.votes = TRUE)
+    imp <- importance(rf)
+    d <- data.frame(imp)
+    varImpGini <- varImpGini + d$MeanDecreaseGini
+    varImpAcc <- varImpAcc + d$MeanDecreaseAccuracy
+    
+    impvar <- rownames(imp)[order(imp[, 1], decreasing=TRUE)]
+    
+ #   varImpPlot(rf, n.var = 10, pch = 15, cex=.75, color=c("darkblue"))
+    
+    ## predict
+    res <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="response", norm.votes = TRUE)
+    rfResponse[fold] <- res
+    prob <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="prob", norm.votes = TRUE)
+    rfProb[fold] <- prob
+  }
+  
+  ## consolidate the results
+  r <- data.frame(ClassifiedProb = rfProb, ClassLabel = rfResponse, TrueClass = Response)
+  
+  
+  impvarGini <- varImpFeatures
+  indxImp <- order(varImpGini, decreasing=FALSE)
+  
+  indxImpGiniGC <- indxImp
+  
+  mar.default <- c(5,4,4,2) + 0.1
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+  
+  
+  impvarAcc <- varImpFeatures
+  indxImp <- order(varImpAcc, decreasing=FALSE)
+  
+ 
+  dotchart(varImpAcc[indxImp], labels=impvarAcc[indxImp], cex=0.9, main = "Accuracy", xlab="Mean decrease accuracy", lwd=2, col="darkblue", pch=15)
+  
+  rfGCHER2 <- rfResponse
+  rfGCProbHER2 <- rfProb
+  
+```
+
+Compute ROC curve for the prediction using GC
+
+```{r, echo=FALSE}
+
+  r1 <- roc(Response ~ rfProb, smooth=TRUE)
+  print(r1$auc)
+  ci(r1$auc)
+#  plot(r1, col="blue", xlim=c(0.05,0.95), ylim = c(0.05,0.95))
+  p <- performance(prediction(rfGCHER2, ResponseHER2), "tpr", "tnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+  p <- performance(prediction(rfGCHER2, ResponseHER2), "fpr", "fnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  ## confusion matrix
+  t <- table(rfResponse==1, Response==1)
+ colnames(t) <- paste(c("HER2-", "HER2+"))
+  rownames(t) <- paste(c("DetHER2-", "DetHER2+"))
+  
+  
+  #t <- t/sum(t[,1])
+  t[,1] <- t[,1]/sum(t[,1])
+  t[,2] <- t[,2]/sum(t[,2])
+  print(t)
+  tGC <- t
+  
+  GCAcc[1,2:ncol(GCAcc)] <- c(sum(as.numeric(Response==1)), sum(as.numeric(Response==2)), t[4]+t[1]-1, t[4], t[1], t[2], t[3], r1$auc)
+  
+```
+
+
+Assess whether any of the featues are significantly different between the two groups
+
+```{r, echo=FALSE, warning=FALSE}
+# 
+   gc.data <- texturedata[texturedata$Method=="GC",]
+#   
+   dIndex <- c("PID", "Method", "Trial", "SubType")
+   features <- gc.data[, !names(gc.data)%in%dIndex]
+   fnames <- names(features)
+# 
+   indxImp <- indxImpGiniGC
+    pvals = rep(0,5)
+   for (i in  32:36) {
+#     #print(fnames[indxImp[i]])
+     p <- tidy(wilcox.test(features[,indxImp[i]] ~ gc.data$SubType))%>%
+       select(p.value)
+     pvals[i-31] <- p$p.value
+   }
+   pvals <- p.adjust(pvals)
+#   
+  adjPvals$GC.Feature <- fnames[indxImp[32:36]]
+  adjPvals$GC.P <- pvals
+
+
+```
+
+
+**What is the accuracy when using GCGMM-based features?**
+
+
+```{r, echo=FALSE, warning=FALSE}
+  
+  clin.features <- GCGMM.features
+  Response <- as.factor(clin.features$SubType)
+
+  ## produce cross validated folds
+ 
+  folds <- rep_len(1:nrFolds, nrow(clin.features))
+  rfResponse <- Response * 0
+  rfProb <- rfResponse
+  
+  varImpGini <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  varImpFeatures <- colnames(clin.features[!names(clin.features) %in% dropIndx])
+  varImpAcc <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  
+  for(k in 1 : nrFolds) {
+    
+    fold <- which(folds==k)
+    data.train <- clin.features[-fold,]
+    y <- Response[-fold]
+    data.test <- clin.features[fold,]
+    ytest <- Response[fold]
+    
+    ## train and test the RF classifier
+    rf <- randomForest(as.factor(y) ~., data=data.train[,!names(data.train) %in% dropIndx], importance=TRUE, ntree=numTrees, norm.votes = TRUE)
+    imp <- importance(rf)
+    d <- data.frame(imp)
+    varImpGini <- varImpGini + d$MeanDecreaseGini
+    varImpAcc <- varImpAcc + d$MeanDecreaseAccuracy
+    
+    impvar <- rownames(imp)[order(imp[, 1], decreasing=TRUE)]
+    
+#    varImpPlot(rf, n.var = 10, pch = 15, cex=.75, color=c("darkblue"))
+    
+    ## predict
+    res <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="response", norm.votes = TRUE)
+    rfResponse[fold] <- res
+    prob <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="prob", norm.votes = TRUE)
+    rfProb[fold] <- prob
+  }
+  
+  ## consolidate the results
+  r <- data.frame(ClassifiedProb = rfProb, ClassLabel = rfResponse, TrueClass = Response)
+  
+  
+  impvarGini <- varImpFeatures
+  indxImp <- order(varImpGini, decreasing=FALSE)
+  
+  indxImpGiniGCGMM <- indxImp
+  
+  mar.default <- c(5,4,4,2) + 0.1
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+  
+  
+  impvarAcc <- varImpFeatures #[order(varImpAcc, decreasing=TRUE)]
+  indxImp <- order(varImpAcc, decreasing=FALSE)
+  
+ 
+  dotchart(varImpAcc[indxImp], labels=impvarAcc[indxImp], cex=0.9, main = "Accuracy", xlab="Mean decrease accuracy", lwd=2, col="darkblue", pch=15)
+  
+  rfGCGMMHER2 <- rfResponse
+  rfGCGMMProbHER2 <- rfProb
+  
+```
+
+Plot the ROC curve for the prediction using GCGMM
+
+```{r, echo=FALSE}
+
+ 
+  r1 <- roc(Response ~ rfProb, smooth=TRUE)
+  print(r1$auc)
+  ci(r1$auc)
+#  plot(r1, col="blue")
+  
+   p <- performance(prediction(rfGCGMMHER2, ResponseHER2), "tpr", "tnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+  p <- performance(prediction(rfGCGMMHER2, ResponseHER2), "fpr", "fnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+  ## confusion matrix
+  t <- table(rfResponse==1, Response==1)
+   colnames(t) <- paste(c("HER2-", "HER2+"))
+  rownames(t) <- paste(c("DetHER2-", "DetHER2+"))
+  
+#  t <- t/sum(t[,1])
+  t[,1] <- t[,1]/sum(t[,1])
+  t[,2] <- t[,2]/sum(t[,2])
+  print(t)
+  
+  tGCGMM <- t
+  
+  GCGMMAcc[1,2:ncol(GCGMMAcc)] <- c(sum(as.numeric(Response==1)), sum(as.numeric(Response==2)), t[4]+t[1]-1, t[4], t[1], t[2], t[3], r1$auc)
+```
+
+Assess whether any of the featues are significantly different between the two groups
+
+```{r, echo=FALSE, warning=FALSE}
+
+   gcgmm.data <- texturedata[texturedata$Method=="GCGMM",]
+  # 
+   dIndex <- c("PID", "Method", "Trial", "SubType")
+   features <- gcgmm.data[, !names(gcgmm.data)%in%dIndex]
+   fnames <- names(features)
+  # 
+   indxImp <- indxImpGiniGCGMM
+    pvals = rep(0,5)
+   for (i in  32:36) {
+  #   #print(fnames[indxImp[i]])
+     p <- tidy(wilcox.test(features[,indxImp[i]] ~ gcgmm.data$SubType))%>%
+       select(p.value)
+     pvals[i-31] <- p$p.value
+   }
+   pvals <- p.adjust(pvals)
+  # 
+  adjPvals$GCGMM.Feature <- fnames[indxImp[32:36]]
+  adjPvals$GCGMM.P <- pvals
+
+  kable(adjPvals, digits = 2, align="l")
+```
+
+***
+
+###ERPR vs. TN classifier
+
+
+**Testing with 150% Data augmentation**
+
+```{r, echo=FALSE, warning=FALSE}
+
+
+  #clin.features <- read.csv("textureFeaturesClassAug150TNERGC.csv")
+  clin.features <- read.csv("SIDataFile5.csv")
+
+  indxNotHER2 <- clin.features$SubType == -1
+  clin.features$SubType[indxNotHER2] = 2
+  
+  GT.features <- clin.features[clin.features$Method == "GT",]
+  GC.features <- clin.features[clin.features$Method == "GC",]
+  GCGMM.features <- clin.features[clin.features$Method == "GCGMM",]
+  FCM.features <- clin.features[clin.features$Method=="FCM",]
+  
+  dropIndx <- c("SubType", "Method")
+  
+  nrFolds <- nrow(GT.features)-1
+
+```
+
+
+
+```{r, echo=FALSE, warning=FALSE}
+  
+  clin.features <- GT.features
+  Response <- as.factor(clin.features$SubType)
+
+  ResponseERPRTN <- Response
+  
+  ## produce cross validated folds
+
+  folds <- rep_len(1:nrFolds, nrow(clin.features))
+  rfResponse <- Response * 0
+  rfProb <- rfResponse
+  
+  varImpGini <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  varImpFeatures <- colnames(clin.features[!names(clin.features) %in% dropIndx])
+  varImpAcc <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  
+  for(k in 1 : nrFolds) {
+    
+    fold <- which(folds==k)
+    data.train <- clin.features[-fold,]
+    y <- Response[-fold]
+    data.test <- clin.features[fold,]
+    ytest <- Response[fold]
+    
+    ## train and test the RF classifier
+    rf <- randomForest(as.factor(y) ~., data=data.train[,!names(data.train) %in% dropIndx], importance=TRUE, ntree=numTrees, norm.votes = TRUE)
+    imp <- importance(rf)
+    d <- data.frame(imp)
+    varImpGini <- varImpGini + d$MeanDecreaseGini
+    varImpAcc <- varImpAcc + d$MeanDecreaseAccuracy
+    
+    impvar <- rownames(imp)[order(imp[, 1], decreasing=TRUE)]
+    
+ #   varImpPlot(rf, n.var = 10, pch = 15, cex=.75, color=c("darkblue"))
+    
+    ## predict
+    res <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="response", norm.votes = TRUE)
+    rfResponse[fold] <- res
+    prob <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="prob", norm.votes = TRUE)
+    rfProb[fold] <- prob
+  }
+  
+  ## consolidate the results
+  r <- data.frame(ClassifiedProb = rfProb, ClassLabel = rfResponse, TrueClass = Response)
+  
+  
+  impvarGini <- varImpFeatures
+  indxImp <- order(varImpGini, decreasing=FALSE)
+  
+  indxImpGiniGT = indxImp
+  
+  mar.default <- c(5,4,4,2) + 0.1
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+  
+   impvarAcc <- varImpFeatures
+  indxImp <- order(varImpAcc, decreasing=FALSE)
+  
+  indxImpAccGT = indxImp
+  
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+ 
+  dotchart(varImpAcc[indxImp], labels=impvarAcc[indxImp], cex=0.9, main = "Accuracy", xlab="Mean decrease accuracy", lwd=2, col="darkblue", pch=15)
+  
+  varImpAccGT = varImpAcc
+  varImgGiniGT = varImpGini
+  
+  rfGTERPRTN <- rfResponse
+  rfGTProbERPRTN <- rfProb
+  
+  
+```
+
+Plot the ROC curve for the prediction using GT
+
+```{r, echo=FALSE}
+
+  r1 <- roc(Response ~ rfProb, smooth=TRUE)
+  print(r1$auc)
+  ci(r1$auc)
+ # plot(r1, col="blue")
+  
+  p <- performance(prediction(rfGTERPRTN, ResponseERPRTN), "tpr", "tnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+  p <- performance(prediction(rfGTERPRTN, ResponseERPRTN), "fpr", "fnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+  ## confusion matrix
+  t <- table(rfResponse==1, Response==1)
+  colnames(t) <- paste(c("TN", "ERPR"))
+  rownames(t) <- paste(c("DetTN", "DetERPR"))
+  
+ # t <- t/sum(t[,1])
+  t[,1] <- t[,1]/sum(t[,1])
+  t[,2] <- t[,2]/sum(t[,2])
+  print(t)
+  
+  tGT <- t
+  
+  GTAcc[2,2:ncol(GTAcc)] <- c(sum(as.numeric(Response==1)), sum(as.numeric(Response==2)), t[4]+t[1]-1, t[4], t[1], t[2], t[3], r1$auc)
+  
+```
+
+
+Assess whether any of the top five featues are significantly different between the two groups
+
+```{r, echo=FALSE, warning=FALSE}
+
+   #gt.data <- read.csv("textureFeaturesClassNoAugTNERGC.csv")
+   gt.data <- read.csv("SIDataFile6.csv")
+   gt.data <- gt.data[gt.data$Method=="GT",]
+  # 
+   features <- gt.data[, !names(gt.data)%in%dropIndx]
+   fnames <- names(features)
+   indxImp <- indxImpGiniGT
+  # 
+   pvals = rep(0,5)
+   for (i in  32:36) {
+  #   #print(fnames[indxImp[i]])
+     p <- tidy(wilcox.test(features[,indxImp[i]] ~ gt.data$SubType))%>%
+       select(p.value)
+     pvals[i-31] <- p$p.value
+   }
+   pvals <- p.adjust(pvals)
+  # 
+ # fnames <- names(GT.features[!names(GT.features)%in%dropIndx])
+  
+  adjPvals$GT.Feature <- fnames[indxImp[32:36]]
+  adjPvals$GT.P <- pvals
+
+
+```
+
+
+** What is the accuracy when using FCM-based features?**
+
+
+```{r, echo=FALSE, warning=FALSE}
+  
+  clin.features <- FCM.features
+  Response <- as.factor(clin.features$SubType)
+
+  ## produce cross validated folds
+  
+  folds <- rep_len(1:nrFolds, nrow(clin.features))
+  rfResponse <- Response * 0
+  rfProb <- rfResponse
+  
+  varImpGini <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  varImpFeatures <- colnames(clin.features[!names(clin.features) %in% dropIndx])
+  varImpAcc <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  
+  for(k in 1 : nrFolds) {
+    
+    fold <- which(folds==k)
+    data.train <- clin.features[-fold,]
+    y <- Response[-fold]
+    data.test <- clin.features[fold,]
+    ytest <- Response[fold]
+    
+    ## train and test the RF classifier
+    rf <- randomForest(as.factor(y) ~., data=data.train[,!names(data.train) %in% dropIndx], importance=TRUE, ntree=numTrees, norm.votes = TRUE)
+    imp <- importance(rf)
+    d <- data.frame(imp)
+    varImpGini <- varImpGini + d$MeanDecreaseGini
+    varImpAcc <- varImpAcc + d$MeanDecreaseAccuracy
+    
+    impvar <- rownames(imp)[order(imp[, 1], decreasing=TRUE)]
+    
+#    varImpPlot(rf, n.var = 10, pch = 15, cex=.75, color=c("darkblue"))
+    
+    ## predict
+    res <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="response", norm.votes = TRUE)
+    rfResponse[fold] <- res
+    prob <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="prob", norm.votes = TRUE)
+    rfProb[fold] <- prob
+  }
+  
+  ## consolidate the results
+  r <- data.frame(ClassifiedProb = rfProb, ClassLabel = rfResponse, TrueClass = Response)
+  
+  
+  impvarGini <- varImpFeatures
+  indxImp <- order(varImpGini, decreasing=FALSE)
+  
+  indxImpGiniFCM <- indxImp
+  
+  mar.default <- c(5,4,4,2) + 0.1
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+  
+ impvarAcc <- varImpFeatures
+  indxImp <- order(varImpAcc, decreasing=FALSE)
+  
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+ 
+  dotchart(varImpAcc[indxImp], labels=impvarAcc[indxImp], cex=0.9, main = "Accuracy", xlab="Mean decrease accuracy", lwd=2, col="darkblue", pch=15)
+  
+  rfFCMERPRTN <- rfResponse
+  rfFCMProbERPRTN <- rfProb
+  
+```
+
+Compute ROC curve for the prediction using FCM
+
+```{r, echo=FALSE}
+
+
+  r1 <- roc(Response ~ rfProb, smooth=TRUE)
+  print(r1$auc)
+  ci(r1$auc)
+ # plot(r1, col="blue")
+  
+   p <- performance(prediction(rfFCMERPRTN, ResponseERPRTN), "tpr", "tnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+  p <- performance(prediction(rfFCMERPRTN, ResponseERPRTN), "fpr", "fnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+  ## confusion matrix
+  t <- table(rfResponse==1, Response==1)
+   colnames(t) <- paste(c("TN", "ERPR"))
+  rownames(t) <- paste(c("DetTN", "DetERPR"))
+  
+  
+#  t <- t/sum(t[,1])
+  t[,1] <- t[,1]/sum(t[,1])
+  t[,2] <- t[,2]/sum(t[,2])
+  print(t)
+  
+  FCMAcc[2,2:ncol(FCMAcc)] <- c(sum(as.numeric(Response==1)), sum(as.numeric(Response==2)), t[4]+t[1]-1, t[4], t[1], t[2], t[3], r1$auc)
+  
+  tFCM <- t
+```
+
+Assess whether any of the featues are significantly different between the two groups
+
+```{r, echo=FALSE, warning=FALSE}
+
+  texture.data <- read.csv("SIDataFile6.csv") 
+  fcm.data <- texture.data[texture.data$Method=="FCM" & texture.data$SubType != "HER",]
+  
+  dIndex <- c("PID", "Method", "Trial", "SubType")
+  features <- fcm.data[, !names(fcm.data)%in%dIndex]
+  fnames <- names(features)
+  indxImp <- indxImpGiniFCM
+  
+   pvals = rep(0,5)
+  for (i in  32:36) {
+    print(fnames[indxImp[i]])
+    p <- tidy(wilcox.test(features[,indxImp[i]] ~ fcm.data$SubType))%>%
+      select(p.value)
+    pvals[i-31] <- p$p.value
+  }
+  pvals <- p.adjust(pvals)
+
+  adjPvals$FCM.Feature <- fnames[indxImp[32:36]]
+  #adjPvals$FCM.P <- pvals
+
+
+```
+
+
+** What is the accuracy when using Grow Cut-based features ? **
+
+
+```{r, echo=FALSE, warning=FALSE}
+  
+  clin.features <- GC.features
+  Response <- as.factor(clin.features$SubType)
+
+  ## produce cross validated folds
+ 
+  folds <- rep_len(1:nrFolds, nrow(clin.features))
+  rfResponse <- Response * 0
+  rfProb <- rfResponse
+  
+  varImpGini <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  varImpFeatures <- colnames(clin.features[!names(clin.features) %in% dropIndx])
+  varImpAcc <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  
+  for(k in 1 : nrFolds) {
+    
+    fold <- which(folds==k)
+    data.train <- clin.features[-fold,]
+    y <- Response[-fold]
+    data.test <- clin.features[fold,]
+    ytest <- Response[fold]
+    
+    ## train and test the RF classifier
+    rf <- randomForest(as.factor(y) ~., data=data.train[,!names(data.train) %in% dropIndx], importance=TRUE, ntree=numTrees, norm.votes = TRUE)
+    imp <- importance(rf)
+    d <- data.frame(imp)
+    varImpGini <- varImpGini + d$MeanDecreaseGini
+    varImpAcc <- varImpAcc + d$MeanDecreaseAccuracy
+    
+    impvar <- rownames(imp)[order(imp[, 1], decreasing=TRUE)]
+    
+ #   varImpPlot(rf, n.var = 10, pch = 15, cex=.75, color=c("darkblue"))
+    
+    ## predict
+    res <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="response", norm.votes = TRUE)
+    rfResponse[fold] <- res
+    prob <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="prob", norm.votes = TRUE)
+    rfProb[fold] <- prob
+  }
+  
+  ## consolidate the results
+  r <- data.frame(ClassifiedProb = rfProb, ClassLabel = rfResponse, TrueClass = Response)
+  
+  
+  impvarGini <- varImpFeatures
+  indxImp <- order(varImpGini, decreasing=FALSE)
+  indxImpGiniGC <- indxImp
+  
+  mar.default <- c(5,4,4,2) + 0.1
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+  
+   impvarAcc <- varImpFeatures
+  indxImp <- order(varImpAcc, decreasing=FALSE)
+  
+  dotchart(varImpAcc[indxImp], labels=impvarAcc[indxImp], cex=0.9, main = "Accuracy", xlab="Mean decrease accuracy", lwd=2, col="darkblue", pch=15)
+  
+  rfGCERPRTN <- rfResponse
+  rfGCProbERPRTN <- rfProb
+  
+```
+
+Compute ROC curve for the prediction using GC
+
+```{r, echo=FALSE}
+
+  r1 <- roc(Response ~ rfProb, smooth=TRUE)
+  print(r1$auc)
+  ci(r1$auc)
+  
+   p <- performance(prediction(rfGCERPRTN, ResponseERPRTN), "tpr", "tnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+  p <- performance(prediction(rfGCERPRTN, ResponseERPRTN), "fpr", "fnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+#  plot(r1, col="blue", xlim=c(0.05,0.95), ylim = c(0.05,0.95))
+  
+  ## confusion matrix
+  t <- table(rfResponse==1, Response==1)
+ colnames(t) <- paste(c("TN", "ERPR"))
+  rownames(t) <- paste(c("DetTN", "DetERPR"))
+  
+  
+  #t <- t/sum(t[,1])
+  t[,1] <- t[,1]/sum(t[,1])
+  t[,2] <- t[,2]/sum(t[,2])
+  print(t)
+  tGC <- t
+  
+  GCAcc[2,2:ncol(GCAcc)] <- c(sum(as.numeric(Response==1)), sum(as.numeric(Response==2)), t[4]+t[1]-1, t[4], t[1], t[2], t[3], r1$auc)
+  
+```
+
+Assess whether any of the featues are significantly different between the two groups
+
+```{r, echo=FALSE, warning=FALSE}
+# 
+   gc.data <- texture.data[texture.data$Method=="GC",]
+ #  myres <- as.factor(gc.data$SubType=="ERPR")
+#  
+   dIndex <- c("PID", "Method", "Trial", "SubType")
+   features <- gc.data[, !names(gc.data)%in%dIndex]
+   fnames <- names(features)
+
+   indxImp <- indxImpGiniGC
+   #   
+    pvals = rep(0,5)
+   for (i in  32:36) {
+#     #print(fnames[indxImp[i]])
+     p <- tidy(wilcox.test(features[,indxImp[i]] ~ gc.data$SubType))%>%
+       select(p.value)
+     pvals[i-31] <- p$p.value
+   }
+   pvals <- p.adjust(pvals)
+#   
+  adjPvals$GC.Feature <- fnames[indxImp[32:36]]
+  adjPvals$GC.P <- pvals
+
+  
+```
+
+
+** What is the accuracy when using GCGMM-based features?**
+
+
+```{r, echo=FALSE, warning=FALSE}
+  
+  clin.features <- GCGMM.features
+  Response <- as.factor(clin.features$SubType)
+
+  ## produce cross validated folds
+ 
+  folds <- rep_len(1:nrFolds, nrow(clin.features))
+  rfResponse <- Response * 0
+  rfProb <- rfResponse
+  
+  varImpGini <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  varImpFeatures <- colnames(clin.features[!names(clin.features) %in% dropIndx])
+  varImpAcc <- rep(0, ncol(clin.features[!names(clin.features) %in% dropIndx]))
+  
+  for(k in 1 : nrFolds) {
+    
+    fold <- which(folds==k)
+    data.train <- clin.features[-fold,]
+    y <- Response[-fold]
+    data.test <- clin.features[fold,]
+    ytest <- Response[fold]
+    
+    ## train and test the RF classifier
+    rf <- randomForest(as.factor(y) ~., data=data.train[,!names(data.train) %in% dropIndx], importance=TRUE, ntree=numTrees, norm.votes = TRUE)
+    imp <- importance(rf)
+    d <- data.frame(imp)
+    varImpGini <- varImpGini + d$MeanDecreaseGini
+    varImpAcc <- varImpAcc + d$MeanDecreaseAccuracy
+    
+    impvar <- rownames(imp)[order(imp[, 1], decreasing=TRUE)]
+    
+#    varImpPlot(rf, n.var = 10, pch = 15, cex=.75, color=c("darkblue"))
+    
+    ## predict
+    res <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="response", norm.votes = TRUE)
+    rfResponse[fold] <- res
+    prob <- predict(rf, data.test[,!names(data.test) %in% dropIndx], type="prob", norm.votes = TRUE)
+    rfProb[fold] <- prob
+  }
+  
+  ## consolidate the results
+  r <- data.frame(ClassifiedProb = rfProb, ClassLabel = rfResponse, TrueClass = Response)
+  
+  
+  impvarGini <- varImpFeatures
+  indxImp <- order(varImpGini, decreasing=FALSE)
+  
+  indxImpGiniGCGMM <- indxImp
+  
+  mar.default <- c(5,4,4,2) + 0.1
+  par(mar = mar.default + c(0, 4, 0, 0)) 
+  
+  impvarAcc <- varImpFeatures #[order(varImpAcc, decreasing=TRUE)]
+  indxImp <- order(varImpAcc, decreasing=FALSE)
+  
+  dotchart(varImpAcc[indxImp], labels=impvarAcc[indxImp], cex=0.9, main = "Accuracy", xlab="Mean decrease accuracy", lwd=2, col="darkblue", pch=15)
+  
+  rfGCGMMERPRTN <- rfResponse
+  rfGCGMMProbERPRTN <- rfProb
+  
+```
+
+Compute ROC curve for the prediction using GCGMM
+
+```{r, echo=FALSE}
+
+  
+  r1 <- roc(Response ~ rfProb, smooth=TRUE)
+  print(r1$auc)
+  ci(r1$auc)
+  
+  p <- performance(prediction(rfGCGMMERPRTN, ResponseERPRTN), "tpr", "tnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+  
+  p <- performance(prediction(rfGCGMMERPRTN, ResponseERPRTN), "fpr", "fnr")
+  print(p@y.values[[1]][2])
+  print(p@x.values[[1]][2])
+#  plot(r1, col="blue")
+  
+  ## confusion matrix
+  t <- table(rfResponse==1, Response==1)
+   colnames(t) <- paste(c("TN", "ERPR"))
+  rownames(t) <- paste(c("DetTN", "DetERPR"))
+  
+#  t <- t/sum(t[,1])
+  t[,1] <- t[,1]/sum(t[,1])
+  t[,2] <- t[,2]/sum(t[,2])
+  print(t)
+  
+  tGCGMM <- t
+  
+  GCGMMAcc[2,2:ncol(GCGMMAcc)] <- c(sum(as.numeric(Response==1)), sum(as.numeric(Response==2)), t[4]+t[1]-1, t[4], t[1], t[2], t[3], r1$auc)
+```
+
+Assess whether any of the top five featues are significantly different between the two groups
+
+```{r, echo=FALSE, warning=FALSE}
+
+    gcgmm.data <- texture.data[texture.data$Method=="GCGMM",]
+gcgmm.data <- droplevels(gcgmm.data)
+ #  myres <- as.factor(gcgmm.data$SubType=="ERPR")
+  # 
+   dIndex <- c("PID", "Method", "Trial", "SubType")
+   features <- gcgmm.data[, !names(gcgmm.data)%in%dIndex]
+   fnames <- names(features)
+    
+   indxImp <- indxImpGiniGCGMM
+   # 
+    pvals = rep(0,5)
+   for (i in  32:36) {
+     print(fnames[indxImp[i]])
+     p <- tidy(wilcox.test(features[,indxImp[i]] ~ gcgmm.data$SubType))%>%
+       select(p.value)
+     pvals[i-31] <- p$p.value
+   }
+   pvals <- p.adjust(pvals)
+  # 
+  adjPvals$GCGMM.Feature <- fnames[indxImp[32:36]]
+  adjPvals$GCGMM.P <- pvals
+
+
+  kable(adjPvals, digits = 2, align="l")
+  
+```
+
+***
+
+###Plot the combined ROC curves
+
+```{r, echo=FALSE, warning=FALSE}
+
+ mar.default <- c(4,2,2,2) + 0.1
+ par(mfrow = c(1,2), mar = mar.default + c(0, 4, 0, 0), cex=1.0, cex.axis=1.0, cex.lab=1.0)
+ 
+ #par(mfrow = c(1,2), mar= c(5,4,3,2), cex=1.05, cex.axis=1.05, cex.lab=1.05)
+    
+ #perf1 <- performance(prediction(rfGTHER2, ResponseHER2), "tpr", "fpr")
+ #perf2 <- performance(prediction(rfGCHER2, ResponseHER2), "tpr", "fpr")
+ #perf3 <- performance(prediction(rfGCGMMHER2, ResponseHER2), "tpr", "fpr")
+ #perf4 <- performance(prediction(rfFCMHER2, ResponseHER2), "tpr", "fpr")
+ 
+ perf1 <- roc(as.numeric(ResponseHER2), rfGTProbHER2, smooth=T)
+ perf2 <- roc(as.numeric(ResponseHER2), rfGCProbHER2, smooth=T)
+ perf3 <- roc(as.numeric(ResponseHER2), rfFCMProbHER2, smooth=T)
+ perf4 <- roc(as.numeric(ResponseHER2), rfGCGMMProbHER2, smooth=T)
+ 
+ plot(perf1, col="black", lwd=3, lty=3, identity=F, xlim=c(0.99,0.1), ylim=c(0.1,0.97), cex.axis=1.25, cex.lab=1.5, main="ERPR-HER2+ vs. ERPR+HER2-/TN")
+ plot(perf2, col="orangered", lwd=3, identity=F, xlim=c(0.99,0.1), ylim=c(0.1,0.97), add=T)
+ plot(perf3, col="magenta", lwd=3,lty=3, identity=F, xlim=c(0.99,0.1), ylim=c(0.1,0.97), add=T)
+ plot(perf4, col="blue", lwd=3, identity=F, xlim=c(0.99,0.1), ylim=c(0.1,0.97), add=T)
+legend("bottomright", c("Expert", "GC", "FCM", "GCGMM"), col = c("black", "orangered", "magenta", "blue"), lty=c(3,1,3,1), lwd=2, bty="n", cex=1.25)
+  
+ auc <- performance(prediction(rfGTHER2, ResponseHER2), "auc")
+ GTAcc[1, ncol(GTAcc)] <- auc@y.values[[1]]
+ 
+ auc <- performance(prediction(rfGCHER2, ResponseHER2), "auc")
+ GCAcc[1, ncol(GTAcc)] <- auc@y.values[[1]]
+ 
+ auc <- performance(prediction(rfGCGMMHER2, ResponseHER2), "auc")
+ GCGMMAcc[1, ncol(GTAcc)] <- auc@y.values[[1]]
+ 
+ auc <- performance(prediction(rfFCMHER2, ResponseHER2), "auc")
+ FCMAcc[1, ncol(GTAcc)] <- auc@y.values[[1]]
+ 
+ 
+ 
+ # plot(perf1, col=1, lwd=2, main="ER-HER2+ vs. ERPR+HER2-/TN")
+ # lines(perf2@x.values[[1]], perf2@y.values[[1]], col=2, lwd=2) 
+ # lines(perf3@x.values[[1]], perf3@y.values[[1]], col=3, lwd=2)
+ # lines(perf4@x.values[[1]], perf4@y.values[[1]], col=4, lwd=2)
+ # legend("bottomright", c("Expert", "GC", "GCGMM", "FCM"), col = c(1,2,3,4), lwd=2, bty="n", cex=1.05)
+ 
+ auc <- performance(prediction(rfGTERPRTN, ResponseERPRTN), "auc")
+ GTAcc[2, ncol(GTAcc)] <- auc@y.values[[1]]
+ 
+ auc <- performance(prediction(rfGCERPRTN, ResponseERPRTN), "auc")
+ GCAcc[2, ncol(GTAcc)] <- auc@y.values[[1]]
+ 
+ auc <- performance(prediction(rfGCGMMERPRTN, ResponseERPRTN), "auc")
+ GCGMMAcc[2, ncol(GTAcc)] <- auc@y.values[[1]]
+ 
+  auc <- performance(prediction(rfFCMERPRTN, ResponseERPRTN), "auc")
+  FCMAcc[2, ncol(GTAcc)] <- auc@y.values[[1]]
+ 
+ 
+# perf1 <- performance(prediction(rfGTERPRTN, ResponseERPRTN), "tpr", "fpr")
+# perf2 <- performance(prediction(rfGCERPRTN, ResponseERPRTN), "tpr", "fpr")
+# perf3 <- performance(prediction(rfGCGMMERPRTN, ResponseERPRTN), "tpr", "fpr")
+# perf4 <- performance(prediction(rfFCMERPRTN, ResponseERPRTN), "tpr", "fpr") 
+
+ perf1 <- roc(as.numeric(ResponseERPRTN), rfGTProbERPRTN, smooth=T)
+ perf2 <- roc(as.numeric(ResponseERPRTN), rfGCProbERPRTN, smooth=T)
+ perf3 <- roc(as.numeric(ResponseERPRTN), rfFCMProbERPRTN, smooth=T)
+ perf4 <- roc(as.numeric(ResponseERPRTN), rfGCGMMProbERPRTN, smooth=T)
+  
+ #plot(perf1, col=1, lwd=2, main="ERPR+HER2- vs. TN")
+ #lines(perf2@x.values[[1]], perf2@y.values[[1]], col=2, lwd=2) 
+ #lines(perf3@x.values[[1]], perf3@y.values[[1]], col=3, lwd=2)
+ #lines(perf4@x.values[[1]], perf4@y.values[[1]], col=4, lwd=2)
+ #legend("bottomright", c("Expert", "GC", "GCGMM", "FCM"), col = c(1,2,3,4), lwd=2, bty="n", cex=1.05)
+ 
+ 
+ plot(perf1, col="black", lwd=3, lty=3, identity=F, xlim=c(0.99,0.1), ylim=c(0.1,0.97), cex.axis=1.25, cex.lab=1.5, main="ERPR+HER2- vs. TN")
+ plot(perf2, col="orangered", lwd=3, identity=F, xlim=c(0.99,0.1), ylim=c(0.1,0.97), add=T)
+ plot(perf3, col="magenta", lwd=3,lty=3, identity=F, xlim=c(0.99,0.1), ylim=c(0.1,0.97), add=T)
+ plot(perf4, col="blue", lwd=3, identity=F, xlim=c(0.99,0.1), ylim=c(0.1,0.97), add=T)
+legend("bottomright", c("Expert", "GC", "FCM", "GCGMM"), col = c("black", "orangered", "magenta", "blue"), lty=c(3,1,3,1), lwd=2, bty="n", cex=1.25)
+ 
+ 
+```
+
+##### Display results as a table
+
+```{r, echo=FALSE, results="asis", warning=FALSE}
+  print("Manual Delineation")
+  kable(GTAcc, digits = 3, align="l")
+
+  print("Grow Cut")
+  kable(GCAcc, digits = 3, align="l")
+  
+  print("GCGMM")
+  kable(GCGMMAcc, digits = 3, align="l")
+  
+  print("FCM")
+   kable(FCMAcc, digits = 3, align="l")
+
+
+```
+
+
+**McNemar's test to assess the difference between the classifiers**
+
+```{r, echo=FALSE, warning=FALSE}
+ 
+  accVals <- data.frame(c(rep("GT", length(rfGTHER2)+length(rfGTERPRTN)), 
+                          rep("GC", length(rfGTHER2)+length(rfGTERPRTN)), 
+                          rep("GCGMM", length(rfGTHER2)+length(rfGTERPRTN)), 
+                          rep("FCM", length(rfGTHER2)+length(rfGTERPRTN))), 
+                          c(rep("HER2+vs.notHER2+", length(rfGTHER2)), 
+                            rep("ERPR+vs.TN", length(rfGTERPRTN)),  
+                           rep("HER2+vs.notHER2+", length(rfGTHER2)), 
+                           rep("ERPR+vs.TN", length(rfGTERPRTN)), 
+                          rep("HER2+vs.notHER2+", length(rfGTHER2)), 
+                          rep("ERPR+vs.TN", length(rfGTERPRTN)), 
+                          rep("HER2+vs.notHER2+", length(rfGTHER2)), 
+                          rep("ERPR+vs.TN", length(rfGTERPRTN))), 
+                        c(rfGTHER2, rfGTERPRTN, rfGCHER2, rfGCERPRTN, 
+                          rfGCGMMHER2, rfGCGMMERPRTN,  
+                          rfFCMHER2, rfFCMERPRTN))
+  colnames(accVals) <- c("Method", "Classifier", "Response")
+  
+  testRes <- data.frame(c(rep("HER2+vs.notHER2+",3), rep("ERPR+vs.TN",3)), 
+                        c("GT:GC", "GT:GCGMM", "GT:FCM", "GT:GC", "GT:GCGMM", 
+                          "GT:FCM"), 
+                        c(rep(0,6)), c(rep(0,6)))
+  colnames(testRes) <- c("Classifier", "Methods", "ChiSq", "P-value")
+                                        
+  v1 = accVals$Response[accVals$Method=="GT" & accVals$Classifier=="HER2+vs.notHER2+"]
+  v2 = accVals$Response[accVals$Method=="GC" & accVals$Classifier=="HER2+vs.notHER2+"]
+  performance <- matrix(c(sum(v1==1), sum(v1==2), sum(v2==1), sum(v2==2)), nrow=2, dimnames = list("M1" = c("HER2+", "HER2-"), "M2" = c("HER2+", "HER2-")))
+  
+  res <- mcnemar.test(performance)
+    
+  testRes[1,3] = res$statistic
+  testRes[1,4] = res$p.value
+  
+  v1 = accVals$Response[accVals$Method=="GT" & accVals$Classifier=="ERPR+vs.TN"]
+  v2 = accVals$Response[accVals$Method=="GC" & accVals$Classifier=="ERPR+vs.TN"]
+  performance <- matrix(c(sum(v1==1), sum(v1==2), sum(v2==1), sum(v2==2)), nrow=2, dimnames = list("M1" = c("HER2+", "HER2-"), "M2" = c("HER2+", "HER2-")))
+  
+  res <- mcnemar.test(performance)
+  
+  testRes[4,3] = res$statistic
+  testRes[4,4] = res$p.value
+  
+  
+  v1 = accVals$Response[accVals$Method=="GT" & accVals$Classifier=="HER2+vs.notHER2+"]
+  v2 = accVals$Response[accVals$Method=="GCGMM" & accVals$Classifier=="HER2+vs.notHER2+"]
+  performance <- matrix(c(sum(v1==1), sum(v1==2), sum(v2==1), sum(v2==2)), nrow=2, dimnames = list("M1" = c("HER2+", "HER2-"), "M2" = c("HER2+", "HER2-")))
+  
+  res <- mcnemar.test(performance)
+    
+  testRes[2,3] = res$statistic
+  testRes[2,4] = res$p.value
+  
+  v1 = accVals$Response[accVals$Method=="GT" & accVals$Classifier=="ERPR+vs.TN"]
+  v2 = accVals$Response[accVals$Method=="GCGMM" & accVals$Classifier=="ERPR+vs.TN"]
+  performance <- matrix(c(sum(v1==1), sum(v1==2), sum(v2==1), sum(v2==2)), nrow=2, dimnames = list("M1" = c("HER2+", "HER2-"), "M2" = c("HER2+", "HER2-")))
+  
+  res <- mcnemar.test(performance)
+  
+  
+  testRes[5,3] = res$statistic
+  testRes[5,4] = res$p.value
+  
+  
+  v1 = accVals$Response[accVals$Method=="GT" & accVals$Classifier=="HER2+vs.notHER2+"]
+  v2 = accVals$Response[accVals$Method=="FCM" & accVals$Classifier=="HER2+vs.notHER2+"]
+  performance <- matrix(c(sum(v1==1), sum(v1==2), sum(v2==1), sum(v2==2)), nrow=2, dimnames = list("M1" = c("HER2+", "HER2-"), "M2" = c("HER2+", "HER2-")))
+  
+  res <- mcnemar.test(performance)
+  
+  testRes[3,3] = res$statistic
+  testRes[3,4] = res$p.value
+  
+  
+  v1 = accVals$Response[accVals$Method=="GT" & accVals$Classifier=="ERPR+vs.TN"]
+  v2 = accVals$Response[accVals$Method=="FCM" & accVals$Classifier=="ERPR+vs.TN"]
+  performance <- matrix(c(sum(v1==1), sum(v1==2), sum(v2==1), sum(v2==2)), nrow=2, dimnames = list("M1" = c("HER2+", "HER2-"), "M2" = c("HER2+", "HER2-")))
+  
+  res <- mcnemar.test(performance)
+  
+  testRes[6,3] = res$statistic
+  testRes[6,4] = res$p.value
+  
+  print("McNemar Tests")
+  kable(testRes, digits = 2, aling="l")
+  
+```
+
+**Were there differences in accuracies between GCGMM and other algorithms?**
+
+```{r, echo=FALSE, warning=FALSE}
+
+  
+  accVals <- data.frame(c(rep("GC", length(rfGTHER2)+length(rfGTERPRTN)), 
+                          rep("GCGMM", length(rfGTHER2)+length(rfGTERPRTN)), 
+                          rep("FCM", length(rfGTHER2)+length(rfGTERPRTN))), 
+                          c(rep("HER2+vs.notHER2+", length(rfGTHER2)), 
+                           rep("ERPR+vs.TN", length(rfGTERPRTN)), 
+                          rep("HER2+vs.notHER2+", length(rfGTHER2)), 
+                          rep("ERPR+vs.TN", length(rfGTERPRTN)), 
+                          rep("HER2+vs.notHER2+", length(rfGTHER2)), 
+                          rep("ERPR+vs.TN", length(rfGTERPRTN))), 
+                        c(rfGCHER2, rfGCERPRTN, 
+                          rfGCGMMHER2, rfGCGMMERPRTN,  
+                          rfFCMHER2, rfFCMERPRTN))
+  colnames(accVals) <- c("Method", "Classifier", "Response")
+  
+  testRes <- data.frame(c(rep("HER2+vs.notHER2+",2), rep("ERPR+vs.TN",2)), 
+                        c("GCMM:GC", "GCGMM:FCM", "GCGMM:GC", "GCGMM:FCM"), 
+                        c(rep(0,4)), c(rep(0,4)))
+  colnames(testRes) <- c("Classifier", "Methods", "ChiSq", "P-value")
+                                        
+  v1 = accVals$Response[accVals$Method=="GCGMM" & accVals$Classifier=="HER2+vs.notHER2+"]
+  v2 = accVals$Response[accVals$Method=="GC" & accVals$Classifier=="HER2+vs.notHER2+"]
+  performance <- matrix(c(sum(v1==1), sum(v1==2), sum(v2==1), sum(v2==2)), nrow=2, dimnames = list("M1" = c("HER2+", "HER2-"), "M2" = c("HER2+", "HER2-")))
+  
+  res <- mcnemar.test(performance)
+    
+  testRes[1,3] = res$statistic
+  testRes[1,4] = res$p.value
+  
+  v1 = accVals$Response[accVals$Method=="GCGMM" & accVals$Classifier=="ERPR+vs.TN"]
+  v2 = accVals$Response[accVals$Method=="GC" & accVals$Classifier=="ERPR+vs.TN"]
+  performance <- matrix(c(sum(v1==1), sum(v1==2), sum(v2==1), sum(v2==2)), nrow=2, dimnames = list("M1" = c("HER2+", "HER2-"), "M2" = c("HER2+", "HER2-")))
+  
+  res <- mcnemar.test(performance)
+  
+  testRes[3,3] = res$statistic
+  testRes[3,4] = res$p.value
+  
+  
+  v1 = accVals$Response[accVals$Method=="GCGMM" & accVals$Classifier=="HER2+vs.notHER2+"]
+  v2 = accVals$Response[accVals$Method=="FCM" & accVals$Classifier=="HER2+vs.notHER2+"]
+  performance <- matrix(c(sum(v1==1), sum(v1==2), sum(v2==1), sum(v2==2)), nrow=2, dimnames = list("M1" = c("HER2+", "HER2-"), "M2" = c("HER2+", "HER2-")))
+  
+  res <- mcnemar.test(performance)
+    
+  testRes[2,3] = res$statistic
+  testRes[2,4] = res$p.value
+  
+  v1 = accVals$Response[accVals$Method=="GCGMM" & accVals$Classifier=="ERPR+vs.TN"]
+  v2 = accVals$Response[accVals$Method=="FCM" & accVals$Classifier=="ERPR+vs.TN"]
+  performance <- matrix(c(sum(v1==1), sum(v1==2), sum(v2==1), sum(v2==2)), nrow=2, dimnames = list("M1" = c("HER2+", "HER2-"), "M2" = c("HER2+", "HER2-")))
+  
+  res <- mcnemar.test(performance)
+  
+  
+  testRes[4,3] = res$statistic
+  testRes[4,4] = res$p.value
+  
+  
+  print("McNemar Tests for GCGMM")
+  kable(testRes, digits = 2, aling="l")
+
+```
